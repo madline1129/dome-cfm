@@ -119,6 +119,26 @@ sh tools/eval.sh
 sh tools/vis_diffusion.sh
 ```
 
+### DOME with flow matching + resample
+如果已经准备好 OccVAE checkpoint，只想冻结 OccVAE 并训练 DOME，可以使用下面这套入口。详细说明见 `docs/train_dome_flow_resample.md`。
+
+```shell
+# optional: check data, ckpt and torchcfm
+python tools/check_dome_resample_setup.py
+
+# optional: generate resampled occupancy data
+bash tools/prepare_resample_data.sh
+
+# train DOME only
+bash tools/train_dome_flow_resample.sh
+
+# eval
+bash tools/eval_dome_flow_resample.sh
+
+# visualize
+bash tools/vis_dome_flow_resample.sh
+```
+
 ## 🎫 Acknowledgment
 This code draws inspiration from their work. We sincerely appreciate their excellent contribution.
 - [OccWorld](https://github.com/wzzheng/OccWorld)
@@ -136,4 +156,3 @@ This code draws inspiration from their work. We sincerely appreciate their excel
   year={2024}
 }
 ```
-
