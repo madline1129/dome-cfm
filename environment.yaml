@@ -1,0 +1,31 @@
+# DOME + Conditional Flow Matching base environment.
+#
+# 用法：
+#   conda env create -f environment.yaml
+#   conda activate torchcfm
+#   bash tools/install_pip_env.sh
+#
+# 这个文件只负责安装 Python / PyTorch / CUDA 基础环境。
+# DOME 的 Python 包和 torchcfm 统一交给 pip requirements 安装，避免 conda
+# 与 pip 同时解析大量 Python 包造成版本漂移。
+name: torchcfm
+channels:
+  - pytorch
+  - nvidia
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main
+  - conda-forge
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free/
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/
+dependencies:
+  - python=3.8.0
+  - pip=23.2.1
+  - setuptools
+  - wheel
+  - pytorch=2.0.1
+  - pytorch-cuda=11.8
+  - torchvision=0.15.2
+  - torchaudio=2.0.2
+  - torchtriton=2.0.0
+  - numpy=1.24.3
