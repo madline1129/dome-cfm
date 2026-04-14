@@ -356,13 +356,14 @@ def main(local_rank, args):
                         dict_to_save['ema'] = ema.state_dict()
                     save_file_name = os.path.join(os.path.abspath(args.work_dir), 'iter.pth')
                     torch.save(dict_to_save, save_file_name)
-                    dst_file = osp.join(args.work_dir, 'latest.pth')
-                    # symlink(save_file_name, dst_file) #bug in cluster
-                    logger.info(f'iter ckpt {i_iter + 1} saved!')
+                    latest_file_name = os.path.join(os.path.abspath(args.work_dir), 'latest.pth')
+                    torch.save(dict_to_save, latest_file_name)
+                    logger.info(f'iter ckpt {i_iter + 1} saved: {save_file_name}')
+                    logger.info(f'latest checkpoint saved: {latest_file_name}')
             # break #debug
         
         # save checkpoint
-        if local_rank == 0 and (epoch+1) % cfg.get('save_every_epochs', 1) == 0:
+        if local_rank == 0:
             dict_to_save = {
                 'state_dict': raw_model.state_dict(),
                 'optimizer': optimizer.state_dict(),
@@ -372,10 +373,14 @@ def main(local_rank, args):
             }
             if args.ema:
                 dict_to_save['ema'] = ema.state_dict()
-            save_file_name = os.path.join(os.path.abspath(args.work_dir), f'epoch_{epoch+1}.pth')
-            torch.save(dict_to_save, save_file_name)
-            dst_file = osp.join(args.work_dir, 'latest.pth')
-            # symlink(save_file_name, dst_file) #bug in cluster
+            latest_file_name = os.path.join(os.path.abspath(args.work_dir), 'latest.pth')
+            torch.save(dict_to_save, latest_file_name)
+            logger.info(f'latest checkpoint saved at epoch {epoch + 1}: {latest_file_name}')
+
+            if (epoch+1) % cfg.get('save_every_epochs', 1) == 0:
+                save_file_name = os.path.join(os.path.abspath(args.work_dir), f'epoch_{epoch+1}.pth')
+                torch.save(dict_to_save, save_file_name)
+                logger.info(f'epoch checkpoint saved: {save_file_name}')
 
         epoch += 1
         first_run = False
