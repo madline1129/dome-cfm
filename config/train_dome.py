@@ -14,6 +14,7 @@ print_freq = 1
 max_epochs = 2000
 warmup_iters = 50
 ema = True
+find_unused_parameters = True
 
 load_from = ''
 vae_load_from = 'ckpts/occvae_latest.pth'
