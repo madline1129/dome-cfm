@@ -6,6 +6,7 @@ channels:
   - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main
   - defaults
 dependencies:
+
   - _openmp_mutex=4.5=20_gnu
   - blas=1.0=mkl
   - brotli-python=1.1.0=py38h17151c0_1
