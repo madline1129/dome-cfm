@@ -334,7 +334,8 @@ def main(local_rank, args):
                 for loss_name, loss_value in loss_dict.items():
                     loss_value=loss_value.mean().item()
                     detailed_loss.append(f'{loss_name}: {loss_value:.5f}')
-                    writer.add_scalar(f'train/{loss_name}', loss_value, global_iter)
+                    if loss_name != 'loss':
+                        writer.add_scalar(f'train/{loss_name}', loss_value, global_iter)
                 detailed_loss = ', '.join(detailed_loss)
                 logger.info(detailed_loss)
                 loss_list = []
