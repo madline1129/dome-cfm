@@ -33,4 +33,4 @@ echo "[CMD] ${CMD[*]}"
 
 "${CMD[@]}"
 
-tensorboard --logdir /mnt/data2/whz/dome-cfm/work_dir/dome_flow_no_resample/tb_log --port 6005 --host 0.0.0.0
+tensorboard --logdir /mnt/data2/whz/dome-cfm/work_dir/dome_flow_no_resample/tb_log --port 6004 --host 0.0.0.0
