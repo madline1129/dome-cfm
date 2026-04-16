@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
-CFG="${CFG:-./config/train_dome.py}"
+CFG="${CFG:-./config/eval_dome_latest.py}"
 WORK_DIR="${WORK_DIR:-./work_dir/dome_latest_eval}"
 DOME_CKPT="${DOME_CKPT:-ckpts/dome_latest.pth}"
 VAE_CKPT="${VAE_CKPT:-ckpts/occvae_latest.pth}"
