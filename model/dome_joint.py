@@ -62,7 +62,11 @@ class JointDome(Dome):
 
     def _encode_traj(self, traj_t):
         if traj_t is None:
-            raise ValueError("JointDome.forward requires traj_t with shape (B, T, D).")
+            raise ValueError(
+                "JointDome.forward requires traj_t with shape (B, T, D). "
+                "This usually means the config is using JointDome but the "
+                "generation process is not joint_flow."
+            )
         if self.trajectory_encoder_uses_sequence:
             return self.trajectory_encoder(traj_t)
         return self.trajectory_encoder(rearrange(traj_t, "b t d -> b (t d)"))

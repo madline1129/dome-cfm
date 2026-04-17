@@ -20,7 +20,7 @@ from copy import deepcopy
 from torch.utils.tensorboard import SummaryWriter
 import warnings
 warnings.filterwarnings("ignore")
-from diffusion import create_diffusion, create_flow_matching
+from diffusion import create_diffusion, create_flow_matching, create_joint_flow_matching
 from einops import rearrange
 from torch.cuda.amp import GradScaler
 from tqdm import tqdm
@@ -31,6 +31,22 @@ def pass_print(*args, **kwargs):
 
 
 def build_generation_process(cfg, timestep_respacing):
+    if cfg.sample.get('sample_method', 'ddpm') == 'joint_flow':
+        return create_joint_flow_matching(
+            num_sampling_steps=cfg.sample.get('num_sampling_steps', 20),
+            sigma=cfg.sample.get('flow_sigma', 0.0),
+            replace_cond_frames=cfg.replace_cond_frames,
+            cond_frames_choices=cfg.cond_frames_choices,
+            model_time_scale=cfg.sample.get('model_time_scale', 1000.0),
+            traj_key=cfg.sample.get('traj_key', 'rel_poses'),
+            traj_start_index=cfg.sample.get('traj_start_index', cfg.sample.get('n_conds', 4)),
+            traj_len=cfg.sample.get('traj_len', 6),
+            traj_dim=cfg.sample.get('traj_dim', 2),
+            traj_loss_weight=cfg.sample.get('traj_loss_weight', 10.0),
+            num_command_modes=cfg.sample.get('num_command_modes', 3),
+            command_lateral_index=cfg.sample.get('command_lateral_index', 0),
+            command_fallback_threshold=cfg.sample.get('command_fallback_threshold', 0.5),
+        )
     if cfg.sample.get('sample_method', 'ddpm') == 'flow':
         return create_flow_matching(
             num_sampling_steps=cfg.sample.get('num_sampling_steps', 20),
