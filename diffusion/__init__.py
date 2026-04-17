@@ -5,6 +5,7 @@
 
 from . import gaussian_diffusion as gd
 from .flow_matching import FlowMatching
+from .joint_flow_matching import JointTrajectoryOccupancyFlowMatching
 from .respace import SpacedDiffusion, space_timesteps
 
 
@@ -67,4 +68,36 @@ def create_flow_matching(
         replace_cond_frames=replace_cond_frames,
         cond_frames_choices=cond_frames_choices,
         model_time_scale=model_time_scale,
+    )
+
+
+def create_joint_flow_matching(
+    num_sampling_steps=20,
+    sigma=0.0,
+    replace_cond_frames=False,
+    cond_frames_choices=None,
+    model_time_scale=1000.0,
+    traj_key="rel_poses",
+    traj_start_index=4,
+    traj_len=6,
+    traj_dim=2,
+    traj_loss_weight=10.0,
+    num_command_modes=3,
+    command_lateral_index=0,
+    command_fallback_threshold=0.5,
+):
+    return JointTrajectoryOccupancyFlowMatching(
+        sigma=sigma,
+        num_timesteps=num_sampling_steps,
+        replace_cond_frames=replace_cond_frames,
+        cond_frames_choices=cond_frames_choices,
+        model_time_scale=model_time_scale,
+        traj_key=traj_key,
+        traj_start_index=traj_start_index,
+        traj_len=traj_len,
+        traj_dim=traj_dim,
+        traj_loss_weight=traj_loss_weight,
+        num_command_modes=num_command_modes,
+        command_lateral_index=command_lateral_index,
+        command_fallback_threshold=command_fallback_threshold,
     )

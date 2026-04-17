@@ -4,3 +4,4 @@ from .VAE.quantizer import VectorQuantizer
 from .pose_encoder import PoseEncoder,PoseEncoder_fourier
 
 from .dome import Dome
+from .dome_joint import JointDome
