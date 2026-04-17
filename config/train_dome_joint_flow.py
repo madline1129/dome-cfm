@@ -8,6 +8,7 @@ _base_ = ['./train_dome_joint_flow_resample.py']
 work_dir = './work_dir/dome_joint_flow'
 
 train_dataset_config = dict(
+    _delete_=True,
     type='nuScenesSceneDatasetLidar',
     data_path='data/nuscenes/',
     imageset='data/nuscenes_infos_train_temporal_v3_scene.pkl',
@@ -18,6 +19,7 @@ train_dataset_config = dict(
 )
 
 val_dataset_config = dict(
+    _delete_=True,
     type='nuScenesSceneDatasetLidar',
     data_path='data/nuscenes/',
     imageset='data/nuscenes_infos_val_temporal_v3_scene.pkl',
