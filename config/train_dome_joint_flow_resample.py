@@ -62,5 +62,13 @@ model = dict(
             do_proj=True,
             max_length=6,
         ),
+        planning_decoder=dict(
+            type='PoseDecoder',
+            in_channels=768,
+            num_layers=2,
+            num_modes=3,
+            num_fut_ts=6,
+            out_dim=2,
+        ),
     ),
 )

@@ -24,6 +24,7 @@ class JointDome(Dome):
         traj_len=6,
         num_command_modes=3,
         trajectory_encoder=None,
+        planning_decoder=None,
         command_dropout_prob=0.0,
         **kwargs,
     ):
@@ -47,12 +48,17 @@ class JointDome(Dome):
         self.command_embedder = nn.Embedding(self.num_command_modes + 1, self.hidden_size)
         self.null_command_id = self.num_command_modes
         self.ego_token_norm = nn.LayerNorm(self.hidden_size)
-        self.planning_head = nn.Sequential(
-            nn.LayerNorm(self.hidden_size),
-            nn.Linear(self.hidden_size, self.hidden_size),
-            nn.SiLU(),
-            nn.Linear(self.hidden_size, self.num_command_modes * self.traj_len * self.traj_dim),
-        )
+        if planning_decoder is None:
+            planning_decoder = dict(
+                type="PoseDecoder",
+                in_channels=self.hidden_size,
+                num_layers=2,
+                num_modes=self.num_command_modes,
+                num_fut_ts=self.traj_len,
+                out_dim=self.traj_dim,
+            )
+        self.planning_decoder_norm = nn.LayerNorm(self.hidden_size)
+        self.planning_decoder = MODELS.build(planning_decoder)
 
     def _encode_traj(self, traj_t):
         if traj_t is None:
@@ -143,13 +149,7 @@ class JointDome(Dome):
         occ = self.unpatchify(x)
         occ = rearrange(occ, "(b f) c h w -> b f c h w", b=batches)
 
-        traj_modes = self.planning_head(ego_token)
-        traj_modes = traj_modes.view(
-            batches,
-            self.num_command_modes,
-            self.traj_len,
-            self.traj_dim,
-        )
+        traj_modes = self.planning_decoder(self.planning_decoder_norm(ego_token))
         traj = traj_modes.gather(
             1,
             commands.clamp(max=self.num_command_modes - 1)
