@@ -102,20 +102,102 @@ def extract_commands_from_metas(
     return torch.as_tensor(commands, device=device, dtype=torch.long)
 
 
-def compute_plan_metrics(pred_traj, target_traj, prefix="plan"):
-    """Compute OccWorld-style trajectory L2 planning metrics.
+def _truthy_flag(value):
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 1:
+            return bool(value.item())
+        return True
+    arr = np.asarray(value)
+    if arr.size == 1:
+        return bool(arr.item())
+    return True
 
-    Returns per-sample tensors so callers can average locally or reduce across
-    distributed workers.
+
+def _has_planning_ann(meta):
+    return all(key in meta for key in ("gt_bboxes_3d", "attr_labels", "fut_valid_flag"))
+
+
+def compute_occworld_plan_metrics(
+    pred_ego_fut_trajs,
+    gt_ego_fut_trajs,
+    metas=None,
+    planning_metric=None,
+    future_second=3,
+):
+    """Compute planning metrics with the same STP3/OccWorld convention.
+
+    The input trajectories are treated as per-step deltas, then converted to
+    cumulative ego future trajectories before evaluating 1s/2s/3s horizons.
     """
-    diff = pred_traj - target_traj
-    l2 = torch.linalg.norm(diff, dim=-1)
+    from utils.metric_stp3 import PlanningMetric
 
-    metrics = {
-        f"{prefix}_ade": l2.mean(dim=1),
-        f"{prefix}_fde": l2[:, -1],
-        f"{prefix}_mse": diff.pow(2).mean(dim=(1, 2)),
+    if planning_metric is None:
+        planning_metric = PlanningMetric()
+
+    device = pred_ego_fut_trajs.device
+    dtype = pred_ego_fut_trajs.dtype
+    pred_cum = torch.cumsum(pred_ego_fut_trajs[..., :2], dim=1).detach().cpu()
+    gt_cum = torch.cumsum(gt_ego_fut_trajs[..., :2], dim=1).detach().cpu()
+    batch, num_frames, _ = pred_cum.shape
+
+    metrics = {}
+    for i in range(future_second):
+        horizon = i + 1
+        cur_time = horizon * 2
+        metrics[f"plan_L2_{horizon}s"] = []
+        metrics[f"plan_L2_{horizon}s_single"] = []
+        metrics[f"plan_obj_col_{horizon}s"] = []
+        metrics[f"plan_obj_box_col_{horizon}s"] = []
+        metrics[f"plan_obj_col_{horizon}s_single"] = []
+        metrics[f"plan_obj_box_col_{horizon}s_single"] = []
+
+        for batch_idx in range(batch):
+            meta = metas[batch_idx] if metas is not None else {}
+            fut_valid_flag = _truthy_flag(meta.get("fut_valid_flag", True))
+            if not fut_valid_flag or cur_time > num_frames:
+                for key in (
+                    f"plan_L2_{horizon}s",
+                    f"plan_L2_{horizon}s_single",
+                    f"plan_obj_col_{horizon}s",
+                    f"plan_obj_box_col_{horizon}s",
+                    f"plan_obj_col_{horizon}s_single",
+                    f"plan_obj_box_col_{horizon}s_single",
+                ):
+                    metrics[key].append(0.0)
+                continue
+
+            pred = pred_cum[batch_idx]
+            gt = gt_cum[batch_idx]
+            metrics[f"plan_L2_{horizon}s"].append(
+                planning_metric.compute_L2(pred[:cur_time], gt[:cur_time])
+            )
+            metrics[f"plan_L2_{horizon}s_single"].append(
+                planning_metric.compute_L2(pred[cur_time - 1 : cur_time], gt[cur_time - 1 : cur_time])
+            )
+
+            if _has_planning_ann(meta):
+                gt_agent_feats = torch.as_tensor(meta["attr_labels"])
+                segmentation, pedestrian = planning_metric.get_label(
+                    meta["gt_bboxes_3d"], gt_agent_feats[None]
+                )
+                occupancy = torch.logical_or(segmentation, pedestrian)
+                obj_coll, obj_box_coll = planning_metric.evaluate_coll(
+                    pred[None, :cur_time],
+                    gt[None, :cur_time],
+                    occupancy,
+                )
+                obj_coll_single, obj_box_coll_single = planning_metric.evaluate_coll(
+                    pred[None, cur_time - 1 : cur_time],
+                    gt[None, cur_time - 1 : cur_time],
+                    occupancy[:, cur_time - 1 : cur_time],
+                )
+                metrics[f"plan_obj_col_{horizon}s"].append(obj_coll.mean().item())
+                metrics[f"plan_obj_box_col_{horizon}s"].append(obj_box_coll.mean().item())
+                metrics[f"plan_obj_col_{horizon}s_single"].append(obj_coll_single.item())
+                metrics[f"plan_obj_box_col_{horizon}s_single"].append(obj_box_coll_single.item())
+
+    return {
+        key: torch.as_tensor(value, device=device, dtype=dtype)
+        for key, value in metrics.items()
+        if value
     }
-    for step_idx in range(l2.shape[1]):
-        metrics[f"{prefix}_l2_step_{step_idx + 1}"] = l2[:, step_idx]
-    return metrics

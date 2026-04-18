@@ -145,3 +145,10 @@ class multi_step_MeanIou:
             logger.info(f'mIoU {self.name} at time {t}: %.2f%%' % (miou * 100))
             mious.append(miou * 100)
         return mious, np.mean(mious)
+
+    def get_per_class_iou(self):
+        ious = torch.ones_like(self.total_seen)
+        valid_mask = self.total_seen != 0
+        denom = self.total_seen + self.total_positive - self.total_correct
+        ious[valid_mask] = self.total_correct[valid_mask] / denom[valid_mask]
+        return ious * 100

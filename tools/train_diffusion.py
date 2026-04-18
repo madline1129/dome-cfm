@@ -30,6 +30,31 @@ def pass_print(*args, **kwargs):
     pass
 
 
+def tb_safe_name(name):
+    return str(name).replace('/', '_')
+
+
+def write_multistep_iou_to_tensorboard(writer, prefix, metric, global_iter):
+    per_class_iou = metric.get_per_class_iou().detach().cpu()
+    for t in range(per_class_iou.shape[0]):
+        step_ious = per_class_iou[t]
+        writer.add_scalar(f'{prefix}_miou/time_{t}', step_ious.mean().item(), global_iter)
+        for label_name, iou in zip(metric.label_str, step_ious):
+            writer.add_scalar(
+                f'{prefix}_iou/time_{t}/{tb_safe_name(label_name)}',
+                iou.item(),
+                global_iter,
+            )
+
+    mean_per_class_iou = per_class_iou.mean(dim=0)
+    for label_name, iou in zip(metric.label_str, mean_per_class_iou):
+        writer.add_scalar(
+            f'{prefix}_iou_mean/{tb_safe_name(label_name)}',
+            iou.item(),
+            global_iter,
+        )
+
+
 def build_generation_process(cfg, timestep_respacing):
     if cfg.sample.get('sample_method', 'ddpm') == 'joint_flow':
         return create_joint_flow_matching(
@@ -116,7 +141,7 @@ def main(local_rank, args):
     from loss import OPENOCC_LOSS
     from utils.metric_util import MeanIoU, multi_step_MeanIou
     from utils.freeze_model import freeze_model
-    from utils.trajectory_condition import compute_plan_metrics, extract_trajectory_from_metas
+    from utils.trajectory_condition import compute_occworld_plan_metrics, extract_trajectory_from_metas
 
     my_model = MODELS.build(cfg.model.world_model)
     # my_model.init_weights()
@@ -416,6 +441,11 @@ def main(local_rank, args):
         plan_loss = 0
         plan_metric_sums = {}
         plan_metric_count = 0
+        planning_metric_eval = getattr(diffusion_eval, "planning_metric", None)
+        if hasattr(diffusion_eval, "planning_metric") and planning_metric_eval is None:
+            from utils.metric_stp3 import PlanningMetric
+            planning_metric_eval = PlanningMetric()
+            diffusion_eval.planning_metric = planning_metric_eval
         
         start_frame=cfg.get('start_frame', 0)
         mid_frame=cfg.get('mid_frame', 3)
@@ -506,7 +536,12 @@ def main(local_rank, args):
                         device=pred_traj_eval.device,
                         dtype=pred_traj_eval.dtype,
                     )
-                    plan_metrics = compute_plan_metrics(pred_traj_eval, target_traj)
+                    plan_metrics = compute_occworld_plan_metrics(
+                        pred_traj_eval,
+                        target_traj,
+                        metas=metas,
+                        planning_metric=planning_metric_eval,
+                    )
                     plan_metric_count += pred_traj_eval.shape[0]
                     for metric_name, metric_value in plan_metrics.items():
                         plan_metric_sums[metric_name] = (
@@ -609,6 +644,9 @@ def main(local_rank, args):
         logger.info(f'avg val miou is {(val_miou[1]+val_miou[3]+val_miou[5])/3}')
         writer.add_scalar(f'val/iou', (val_iou[1]+val_iou[3]+val_iou[5])/3, global_iter)
         writer.add_scalar(f'val/miou', (val_miou[1]+val_miou[3]+val_miou[5])/3, global_iter)
+        if local_rank == 0:
+            write_multistep_iou_to_tensorboard(writer, 'val/sem', CalMeanIou_sem, global_iter)
+            write_multistep_iou_to_tensorboard(writer, 'val/vox', CalMeanIou_vox, global_iter)
 
         if plan_metric_count > 0:
             plan_metric_names = sorted(plan_metric_sums)

@@ -31,7 +31,11 @@ class nuScenesSceneDatasetLidar:
             input_dataset='gts',
             output_dataset='gts',
             new_rel_pose=False,
-            test_index_offset=0
+            test_index_offset=0,
+            return_planning_ann=False,
+            use_valid_flag=True,
+            with_velocity=True,
+            with_attr=True,
         ):
         with open(imageset, 'rb') as f:
             data = pickle.load(f)
@@ -54,6 +58,28 @@ class nuScenesSceneDatasetLidar:
         self.output_dataset = output_dataset
         self.new_rel_pose=new_rel_pose
         self.test_index_offset=test_index_offset
+        self.return_planning_ann = return_planning_ann
+        self.use_valid_flag = use_valid_flag
+        self.with_velocity = with_velocity
+        self.with_attr = with_attr
+        self.CLASSES = [
+            'noise', 'animal' ,'human.pedestrian.adult', 'human.pedestrian.child',
+            'human.pedestrian.construction_worker',
+            'human.pedestrian.personal_mobility',
+            'human.pedestrian.police_officer',
+            'human.pedestrian.stroller', 'human.pedestrian.wheelchair',
+            'movable_object.barrier', 'movable_object.debris',
+            'movable_object.pushable_pullable', 'movable_object.trafficcone',
+            'static_object.bicycle_rack', 'vehicle.bicycle',
+            'vehicle.bus.bendy', 'vehicle.bus.rigid', 'vehicle.car',
+            'vehicle.construction', 'vehicle.emergency.ambulance',
+            'vehicle.emergency.police', 'vehicle.motorcycle',
+            'vehicle.trailer', 'vehicle.truck', 'flat.driveable_surface',
+            'flat.other', 'flat.sidewalk', 'flat.terrain', 'flat.traffic_marking',
+            'static.manmade', 'static.other', 'static.vegetation',
+            'vehicle.ego'
+        ]
+        self.box_mode_3d = Box3DMode.LIDAR
         
     def __len__(self):
         'Denotes the total number of samples'
@@ -91,6 +117,8 @@ class nuScenesSceneDatasetLidar:
         metas = {}
         metas.update(scene_token=self.nusc_infos[scene_name][4]['token'])
         metas.update(self.get_meta_data(scene_name, idx,return_len=return_len_))
+        if self.return_planning_ann:
+            metas.update(self.get_ann_info(scene_name, idx))
         return input_occs[:self.return_len], output_occs[self.offset:], metas
 
     def get_meta_data(self, scene_name, idx,return_len=None):
@@ -138,6 +166,47 @@ class nuScenesSceneDatasetLidar:
                 'e2g_rel0_t':e2g_rel0_t,'e2g_rel0_r':e2g_rel0_r,
                 'rel_poses_yaws':rel_poses_yaws,
         }
+
+    def get_ann_info(self, scene_name, idx):
+        T = 6
+        ann_idx = idx + self.return_len + self.offset - 1 - T
+        info = self.nusc_infos[scene_name][ann_idx]
+        fut_valid_flag = info['valid_flag']
+        if self.use_valid_flag:
+            mask = info['valid_flag']
+        else:
+            mask = info['num_lidar_pts'] > 0
+        gt_bboxes_3d = info['gt_boxes'][mask]
+        gt_names_3d = info['gt_names'][mask]
+        attr_labels = np.zeros((gt_bboxes_3d.shape[0], 34), dtype=np.float32)
+
+        if self.with_velocity:
+            gt_velocity = info['gt_velocity'][mask]
+            nan_mask = np.isnan(gt_velocity[:, 0])
+            gt_velocity[nan_mask] = [0.0, 0.0]
+            gt_bboxes_3d = np.concatenate([gt_bboxes_3d, gt_velocity], axis=-1)
+
+        if self.with_attr:
+            gt_fut_trajs = info['gt_agent_fut_trajs'][mask]
+            gt_fut_masks = info['gt_agent_fut_masks'][mask]
+            gt_fut_goal = info['gt_agent_fut_goal'][mask]
+            gt_lcf_feat = info['gt_agent_lcf_feat'][mask]
+            gt_fut_yaw = info['gt_agent_fut_yaw'][mask]
+            attr_labels = np.concatenate(
+                [gt_fut_trajs, gt_fut_masks, gt_fut_goal[..., None], gt_lcf_feat, gt_fut_yaw], axis=-1
+            ).astype(np.float32)
+
+        gt_bboxes_3d = LiDARInstance3DBoxes(
+            gt_bboxes_3d,
+            box_dim=gt_bboxes_3d.shape[-1],
+            origin=(0.5, 0.5, 0.5)).convert_to(self.box_mode_3d)
+
+        return dict(
+            gt_bboxes_3d=gt_bboxes_3d,
+            gt_names=gt_names_3d,
+            attr_labels=attr_labels,
+            fut_valid_flag=fut_valid_flag,
+        )
 
     def get_traj_mode(self, scene_name, idx):
         gt_modes = []
@@ -604,4 +673,3 @@ def get_meta_data(poses):
         'rel_poses_yaws':rel_poses_yaws,
         'e2g_rel0_t':e2g_rel0_t
     }
-

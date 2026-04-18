@@ -4,7 +4,6 @@ import os.path as osp
 import sys
 import time
 
-import numpy as np
 import torch
 from einops import rearrange
 from mmengine import Config
@@ -19,6 +18,7 @@ from diffusion import create_joint_flow_matching
 from utils.trajectory_condition import (
     extract_commands_from_metas,
     extract_trajectory_from_metas,
+    compute_occworld_plan_metrics,
 )
 
 
@@ -181,16 +181,15 @@ def main(args):
     )
 
     diffusion = build_joint_flow(cfg, num_sampling_steps=args.num_sampling_steps)
+    from utils.metric_stp3 import PlanningMetric
+    planning_metric = PlanningMetric()
     vae_scale_factor = 2 ** (len(cfg.model.vae.encoder_cfg.ch_mult) - 1)
     latent_resolution = cfg.model.vae.encoder_cfg.resolution // vae_scale_factor
     end_frame = cfg.get("end_frame", 10)
     n_conds = cfg.sample.get("n_conds", 0)
 
     total_count = 0
-    ade_sum = 0.0
-    fde_sum = 0.0
-    mse_sum = 0.0
-    per_step_l2_sum = None
+    metric_sums = {}
     command_stats = {}
 
     traj_key = cfg.sample.get("traj_key", "rel_poses")
@@ -244,34 +243,41 @@ def main(args):
 
             diff = pred_traj - target_traj
             l2 = torch.linalg.norm(diff, dim=-1)
-            sq_error = diff.pow(2).mean(dim=(1, 2))
+            plan_metrics = compute_occworld_plan_metrics(
+                pred_traj,
+                target_traj,
+                metas=metas,
+                planning_metric=planning_metric,
+            )
 
             total_count += bs
-            ade_sum += l2.mean(dim=1).sum().item()
-            fde_sum += l2[:, -1].sum().item()
-            mse_sum += sq_error.sum().item()
-            step_sum = l2.sum(dim=0).detach().cpu()
-            per_step_l2_sum = step_sum if per_step_l2_sum is None else per_step_l2_sum + step_sum
+            for metric_name, metric_value in plan_metrics.items():
+                metric_sums[metric_name] = (
+                    metric_sums.get(metric_name, 0.0)
+                    + metric_value.detach().sum().item()
+                )
             update_command_stats(command_stats, commands, l2)
 
             if batch_idx % args.print_freq == 0:
+                current_metrics = {
+                    name: value / total_count
+                    for name, value in metric_sums.items()
+                }
                 logger.info(
                     f"[EVAL_TRAJ] Iter {batch_idx:5d}/{len(val_dataset_loader):5d}: "
-                    f"ADE {ade_sum / total_count:.4f}, "
-                    f"FDE {fde_sum / total_count:.4f}, "
-                    f"MSE {mse_sum / total_count:.4f}"
+                    + ", ".join(f"{name} {value:.4f}" for name, value in sorted(current_metrics.items()))
                 )
 
     if total_count == 0:
         raise RuntimeError("No validation samples were evaluated.")
 
-    per_step_l2 = (per_step_l2_sum / total_count).numpy()
+    final_metrics = {
+        name: value / total_count
+        for name, value in metric_sums.items()
+    }
     logger.info(f"Trajectory samples: {total_count}")
-    logger.info(f"ADE: {ade_sum / total_count:.6f}")
-    logger.info(f"FDE: {fde_sum / total_count:.6f}")
-    logger.info(f"MSE: {mse_sum / total_count:.6f}")
-    logger.info(f"RMSE: {np.sqrt(mse_sum / total_count):.6f}")
-    logger.info(f"Per-step L2: {per_step_l2.tolist()}")
+    for metric_name, metric_value in sorted(final_metrics.items()):
+        logger.info(f"{metric_name}: {metric_value:.6f}")
 
     for command_id in sorted(command_stats):
         stats = command_stats[command_id]

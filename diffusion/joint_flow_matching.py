@@ -4,7 +4,7 @@ import torch as th
 
 from .gaussian_diffusion import append_dims, mean_flat
 from utils.trajectory_condition import (
-    compute_plan_metrics,
+    compute_occworld_plan_metrics,
     extract_commands_from_metas,
     extract_trajectory_from_metas,
 )
@@ -48,6 +48,7 @@ class JointTrajectoryOccupancyFlowMatching:
         self.num_command_modes = int(num_command_modes)
         self.command_lateral_index = int(command_lateral_index)
         self.command_fallback_threshold = float(command_fallback_threshold)
+        self.planning_metric = None
 
     def _sample_cond_mask(self, x):
         bs, num_frames = x.shape[:2]
@@ -159,7 +160,17 @@ class JointTrajectoryOccupancyFlowMatching:
         with th.no_grad():
             t_bc = append_dims(t, traj_start.ndim)
             pred_traj_start = traj_t + (1 - t_bc) * pred_traj
-            terms.update(compute_plan_metrics(pred_traj_start, traj_start))
+            if self.planning_metric is None:
+                from utils.metric_stp3 import PlanningMetric
+                self.planning_metric = PlanningMetric()
+            terms.update(
+                compute_occworld_plan_metrics(
+                    pred_traj_start,
+                    traj_start,
+                    metas=model_kwargs.get("metas"),
+                    planning_metric=self.planning_metric,
+                )
+            )
         return terms
 
     def p_sample_loop(

@@ -16,6 +16,7 @@ train_dataset_config = dict(
     return_len=11,
     times=5,
     test_mode=False,
+    return_planning_ann=True,
 )
 
 val_dataset_config = dict(
@@ -28,4 +29,5 @@ val_dataset_config = dict(
     times=1,
     test_mode=True,
     new_rel_pose=True,
+    return_planning_ann=True,
 )

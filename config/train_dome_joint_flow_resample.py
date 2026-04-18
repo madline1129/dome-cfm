@@ -31,6 +31,10 @@ sample = dict(
     enable_vae_temporal_decoder=True,
 )
 
+val_dataset_config = dict(
+    return_planning_ann=True,
+)
+
 model = dict(
     world_model=dict(
         _delete_=True,
