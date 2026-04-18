@@ -4,6 +4,7 @@ import torch as th
 
 from .gaussian_diffusion import append_dims, mean_flat
 from utils.trajectory_condition import (
+    compute_plan_metrics,
     extract_commands_from_metas,
     extract_trajectory_from_metas,
 )
@@ -155,6 +156,10 @@ class JointTrajectoryOccupancyFlowMatching:
         terms["occ_mse"] = mean_flat(occ_mse**2)
         terms["traj_mse"] = mean_flat(traj_mse**2)
         terms["loss"] = terms["occ_mse"] + self.traj_loss_weight * terms["traj_mse"]
+        with th.no_grad():
+            t_bc = append_dims(t, traj_start.ndim)
+            pred_traj_start = traj_t + (1 - t_bc) * pred_traj
+            terms.update(compute_plan_metrics(pred_traj_start, traj_start))
         return terms
 
     def p_sample_loop(

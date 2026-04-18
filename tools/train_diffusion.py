@@ -116,6 +116,7 @@ def main(local_rank, args):
     from loss import OPENOCC_LOSS
     from utils.metric_util import MeanIoU, multi_step_MeanIou
     from utils.freeze_model import freeze_model
+    from utils.trajectory_condition import compute_plan_metrics, extract_trajectory_from_metas
 
     my_model = MODELS.build(cfg.model.world_model)
     # my_model.init_weights()
@@ -413,6 +414,8 @@ def main(local_rank, args):
         CalMeanIou_sem.reset()
         CalMeanIou_vox.reset()
         plan_loss = 0
+        plan_metric_sums = {}
+        plan_metric_count = 0
         
         start_frame=cfg.get('start_frame', 0)
         mid_frame=cfg.get('mid_frame', 3)
@@ -460,7 +463,20 @@ def main(local_rank, args):
                 
                 # Sample images:
                 sample_method = cfg.sample.get('sample_method', 'ddpm')
-                if sample_method in ('flow', 'joint_flow'):
+                pred_traj_eval = None
+                if sample_method == 'joint_flow':
+                    final_sample = None
+                    for sample in diffusion_eval.p_sample_loop_progressive(
+                        eval_model, noise_shape, None, model_kwargs=model_kwargs, progress=False, device='cuda',
+                        initial_cond_indices=initial_cond_indices,
+                        initial_cond_frames=input_latents,
+                    ):
+                        final_sample = sample
+                    if final_sample is None:
+                        raise RuntimeError("joint_flow sampler did not return a sample")
+                    latents = final_sample["sample"]
+                    pred_traj_eval = final_sample.get("traj")
+                elif sample_method == 'flow':
                     latents = diffusion_eval.p_sample_loop(
                         eval_model,  noise_shape, None, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device='cuda',
                         initial_cond_indices=initial_cond_indices,
@@ -479,6 +495,24 @@ def main(local_rank, args):
                 else:
                     raise ValueError(f"Unsupported sample_method during eval: {sample_method}")
                 latents = 1 / cfg.model.vae.scaling_factor * latents
+
+                if pred_traj_eval is not None:
+                    target_traj = extract_trajectory_from_metas(
+                        metas,
+                        key=cfg.sample.get("traj_key", "rel_poses"),
+                        start_index=cfg.sample.get("traj_start_index", cfg.sample.get("n_conds", 4)),
+                        traj_len=cfg.sample.get("traj_len", 6),
+                        traj_dim=cfg.sample.get("traj_dim", 2),
+                        device=pred_traj_eval.device,
+                        dtype=pred_traj_eval.dtype,
+                    )
+                    plan_metrics = compute_plan_metrics(pred_traj_eval, target_traj)
+                    plan_metric_count += pred_traj_eval.shape[0]
+                    for metric_name, metric_value in plan_metrics.items():
+                        plan_metric_sums[metric_name] = (
+                            plan_metric_sums.get(metric_name, 0.0)
+                            + metric_value.detach().sum().item()
+                        )
 
                 if cfg.model.vae.decoder_cfg.type=='Decoder3D':
                     latents = rearrange(latents,'b f c h w-> b c f h w')
@@ -575,6 +609,31 @@ def main(local_rank, args):
         logger.info(f'avg val miou is {(val_miou[1]+val_miou[3]+val_miou[5])/3}')
         writer.add_scalar(f'val/iou', (val_iou[1]+val_iou[3]+val_iou[5])/3, global_iter)
         writer.add_scalar(f'val/miou', (val_miou[1]+val_miou[3]+val_miou[5])/3, global_iter)
+
+        if plan_metric_count > 0:
+            plan_metric_names = sorted(plan_metric_sums)
+            plan_sum_tensor = torch.tensor(
+                [plan_metric_sums[name] for name in plan_metric_names],
+                dtype=torch.float64,
+                device='cuda',
+            )
+            plan_count_tensor = torch.tensor([plan_metric_count], dtype=torch.float64, device='cuda')
+            if distributed:
+                dist.all_reduce(plan_sum_tensor)
+                dist.all_reduce(plan_count_tensor)
+
+            reduced_plan_count = max(plan_count_tensor.item(), 1.0)
+            val_plan_metrics = {
+                name: plan_sum_tensor[idx].item() / reduced_plan_count
+                for idx, name in enumerate(plan_metric_names)
+            }
+            if local_rank == 0:
+                logger.info(
+                    "Current val plan metrics: "
+                    + ", ".join(f"{name}: {value:.5f}" for name, value in val_plan_metrics.items())
+                )
+                for metric_name, metric_value in val_plan_metrics.items():
+                    writer.add_scalar(f'val/{metric_name}', metric_value, global_iter)
 
         torch.cuda.empty_cache()
 

@@ -100,3 +100,22 @@ def extract_commands_from_metas(
 
         commands.append(max(0, min(int(command), num_modes - 1)))
     return torch.as_tensor(commands, device=device, dtype=torch.long)
+
+
+def compute_plan_metrics(pred_traj, target_traj, prefix="plan"):
+    """Compute OccWorld-style trajectory L2 planning metrics.
+
+    Returns per-sample tensors so callers can average locally or reduce across
+    distributed workers.
+    """
+    diff = pred_traj - target_traj
+    l2 = torch.linalg.norm(diff, dim=-1)
+
+    metrics = {
+        f"{prefix}_ade": l2.mean(dim=1),
+        f"{prefix}_fde": l2[:, -1],
+        f"{prefix}_mse": diff.pow(2).mean(dim=(1, 2)),
+    }
+    for step_idx in range(l2.shape[1]):
+        metrics[f"{prefix}_l2_step_{step_idx + 1}"] = l2[:, step_idx]
+    return metrics
