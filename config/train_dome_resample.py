@@ -84,7 +84,7 @@ val_dataset_config = dict(
     type='nuScenesSceneDatasetLidar')
 train_wrapper_config = dict(phase='train', type='tpvformer_dataset_nuscenes')
 val_wrapper_config = dict(phase='val', type='tpvformer_dataset_nuscenes')
-train_loader = dict(batch_size=8, num_workers=1, shuffle=True)
+train_loader = dict(batch_size=4, num_workers=1, shuffle=True)
 val_loader = dict(batch_size=1, num_workers=1, shuffle=False)
 loss = dict(
     loss_cfgs=[
