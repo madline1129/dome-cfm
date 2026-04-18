@@ -21,7 +21,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.load_save_util import revise_ckpt, revise_ckpt_1
 import warnings
 warnings.filterwarnings("ignore")
-from diffusion import create_diffusion, create_flow_matching
+from diffusion import create_diffusion, create_flow_matching, create_joint_flow_matching
 from einops import rearrange
 
 TIMESTAMP = time.strftime('%Y%m%d_%H%M%S', time.localtime())
@@ -33,7 +33,24 @@ def pass_print(*args, **kwargs):
 
 
 def build_generation_process(cfg, timestep_respacing):
-    if cfg.sample.get('sample_method', 'ddpm') == 'flow':
+    sample_method = cfg.sample.get('sample_method', 'ddpm')
+    if sample_method == 'joint_flow':
+        return create_joint_flow_matching(
+            num_sampling_steps=cfg.sample.get('num_sampling_steps', 20),
+            sigma=cfg.sample.get('flow_sigma', 0.0),
+            replace_cond_frames=cfg.replace_cond_frames,
+            cond_frames_choices=cfg.cond_frames_choices,
+            model_time_scale=cfg.sample.get('model_time_scale', 1000.0),
+            traj_key=cfg.sample.get('traj_key', 'rel_poses'),
+            traj_start_index=cfg.sample.get('traj_start_index', cfg.sample.get('n_conds', 4)),
+            traj_len=cfg.sample.get('traj_len', 6),
+            traj_dim=cfg.sample.get('traj_dim', 2),
+            traj_loss_weight=cfg.sample.get('traj_loss_weight', 10.0),
+            num_command_modes=cfg.sample.get('num_command_modes', 3),
+            command_lateral_index=cfg.sample.get('command_lateral_index', 0),
+            command_fallback_threshold=cfg.sample.get('command_fallback_threshold', 0.5),
+        )
+    if sample_method == 'flow':
         return create_flow_matching(
             num_sampling_steps=cfg.sample.get('num_sampling_steps', 20),
             sigma=cfg.sample.get('flow_sigma', 0.0),
@@ -256,22 +273,25 @@ def main(local_rank, args):
                 initial_cond_indices=[index for index in range(n_conds)]
             
             # Sample images:
-            if cfg.sample.sample_method == 'flow':
+            sample_method = cfg.sample.get('sample_method', 'ddpm')
+            if sample_method in ('flow', 'joint_flow'):
                 latents = diffusion.p_sample_loop(
                     my_model,  noise_shape, None, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device='cuda',
                     initial_cond_indices=initial_cond_indices,
                     initial_cond_frames=input_latents,
                 )
-            elif cfg.sample.sample_method == 'ddim':
+            elif sample_method == 'ddim':
                 latents = diffusion.ddim_sample_loop(
                     my_model,  noise_shape, None, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device='cuda'
                 )
-            elif cfg.sample.sample_method == 'ddpm':
+            elif sample_method == 'ddpm':
                 latents = diffusion.p_sample_loop(
                     my_model,  noise_shape, None, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device='cuda',
                     initial_cond_indices=initial_cond_indices,
                     initial_cond_frames=input_latents,
                 )
+            else:
+                raise ValueError(f"Unsupported sample_method during eval: {sample_method}")
             latents = 1 / cfg.model.vae.scaling_factor * latents
 
             if cfg.model.vae.decoder_cfg.type=='Decoder3D':

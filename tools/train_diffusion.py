@@ -459,22 +459,25 @@ def main(local_rank, args):
                     initial_cond_indices=[index for index in range(n_conds)]
                 
                 # Sample images:
-                if cfg.sample.sample_method == 'flow':
+                sample_method = cfg.sample.get('sample_method', 'ddpm')
+                if sample_method in ('flow', 'joint_flow'):
                     latents = diffusion_eval.p_sample_loop(
                         eval_model,  noise_shape, None, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device='cuda',
                         initial_cond_indices=initial_cond_indices,
                         initial_cond_frames=input_latents,
                     )
-                elif cfg.sample.sample_method == 'ddim':
+                elif sample_method == 'ddim':
                     latents = diffusion_eval.ddim_sample_loop(
                         eval_model,  noise_shape, None, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device='cuda'
                     )
-                elif cfg.sample.sample_method == 'ddpm':
+                elif sample_method == 'ddpm':
                     latents = diffusion_eval.p_sample_loop(
                         eval_model,  noise_shape, None, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device='cuda',
                         initial_cond_indices=initial_cond_indices,
                         initial_cond_frames=input_latents,
                     )
+                else:
+                    raise ValueError(f"Unsupported sample_method during eval: {sample_method}")
                 latents = 1 / cfg.model.vae.scaling_factor * latents
 
                 if cfg.model.vae.decoder_cfg.type=='Decoder3D':

@@ -23,12 +23,29 @@ from vis_gif import create_mp4
 import warnings
 warnings.filterwarnings("ignore")
 from einops import rearrange
-from diffusion import create_diffusion, create_flow_matching
+from diffusion import create_diffusion, create_flow_matching, create_joint_flow_matching
 from vis_utils import draw
 
 
 def build_generation_process(cfg, num_sampling_steps):
-    if cfg.sample.get('sample_method', 'ddpm') == 'flow':
+    sample_method = cfg.sample.get('sample_method', 'ddpm')
+    if sample_method == 'joint_flow':
+        return create_joint_flow_matching(
+            num_sampling_steps=num_sampling_steps,
+            sigma=cfg.sample.get('flow_sigma', 0.0),
+            replace_cond_frames=cfg.replace_cond_frames,
+            cond_frames_choices=cfg.cond_frames_choices,
+            model_time_scale=cfg.sample.get('model_time_scale', 1000.0),
+            traj_key=cfg.sample.get('traj_key', 'rel_poses'),
+            traj_start_index=cfg.sample.get('traj_start_index', cfg.sample.get('n_conds', 4)),
+            traj_len=cfg.sample.get('traj_len', 6),
+            traj_dim=cfg.sample.get('traj_dim', 2),
+            traj_loss_weight=cfg.sample.get('traj_loss_weight', 10.0),
+            num_command_modes=cfg.sample.get('num_command_modes', 3),
+            command_lateral_index=cfg.sample.get('command_lateral_index', 0),
+            command_fallback_threshold=cfg.sample.get('command_fallback_threshold', 0.5),
+        )
+    if sample_method == 'flow':
         return create_flow_matching(
             num_sampling_steps=num_sampling_steps,
             sigma=cfg.sample.get('flow_sigma', 0.0),
@@ -203,7 +220,10 @@ def main(args):
                 initial_cond_indices=[index for index in range(n_conds)]
             
             # Sample images:
-            if cfg.sample.sample_method == 'flow':
+            sample_method = cfg.sample.get('sample_method', 'ddpm')
+            if sample_method in ('flow', 'joint_flow'):
+                if sample_method == 'joint_flow' and args.rolling_sampling_n >= 2:
+                    raise ValueError("joint_flow does not support rolling_sampling_n >= 2")
                 if args.rolling_sampling_n < 2:
                     latents = diffusion.p_sample_loop(
                         my_model,  noise_shape, None, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device='cuda',
@@ -219,11 +239,11 @@ def main(args):
                         n_conds_roll=args.n_conds_roll
                     )
                     end_frame = latents.shape[1]
-            elif cfg.sample.sample_method == 'ddim':
+            elif sample_method == 'ddim':
                 latents = diffusion.ddim_sample_loop(
                     my_model,  noise_shape, None, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device='cuda'
                 )
-            elif cfg.sample.sample_method == 'ddpm':
+            elif sample_method == 'ddpm':
                 if args.rolling_sampling_n<2:
 
                     latents = diffusion.p_sample_loop(
@@ -241,6 +261,8 @@ def main(args):
                         n_conds_roll=args.n_conds_roll
                     )
                     end_frame=latents.shape[1]
+            else:
+                raise ValueError(f"Unsupported sample_method during visualization: {sample_method}")
             latents = 1 / cfg.model.vae.scaling_factor * latents
 
             if cfg.model.vae.decoder_cfg.type=='Decoder3D':
