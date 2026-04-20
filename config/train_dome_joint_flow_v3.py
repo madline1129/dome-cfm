@@ -3,7 +3,7 @@ _base_ = ['./train_dome_joint_flow.py']
 work_dir = './work_dir/dome_joint_flow_v3'
 
 sample = dict(
-    traj_loss_weight=0.3,
+    traj_loss_weight=1.0,
 )
 
 model = dict(
