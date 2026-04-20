@@ -4,7 +4,7 @@ import torch.nn as nn
 from einops import rearrange, repeat
 from mmengine.registry import MODELS
 
-from .dome import Dome
+from .dome import Dome, get_1d_sincos_temp_embed
 from utils.trajectory_condition import extract_commands_from_metas
 
 
@@ -160,6 +160,148 @@ class JointDome(Dome):
             .view(-1, 1, 1, 1)
             .expand(-1, 1, self.traj_len, self.traj_dim),
         ).squeeze(1)
+
+        return {
+            "occ": occ,
+            "traj": traj,
+            "traj_modes": traj_modes,
+            "commands": commands,
+        }
+
+
+@MODELS.register_module()
+class JointDomeV3(JointDome):
+    """Joint DOME with separated noised latent tokens and AdaLN conditions.
+
+    DOMEv3 keeps noised trajectory as a trajectory-token sequence. Timestep and
+    command are fused only as the AdaLN condition, instead of being added into
+    the noised trajectory token.
+    """
+
+    def __init__(
+        self,
+        *args,
+        use_token_planning_head=True,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.use_token_planning_head = bool(use_token_planning_head)
+
+        self.cond_fuser = nn.Sequential(
+            nn.Linear(2 * self.hidden_size, self.hidden_size),
+            nn.SiLU(),
+            nn.Linear(self.hidden_size, self.hidden_size),
+        )
+        self.traj_pos_embed = nn.Parameter(
+            torch.zeros(1, self.traj_len, self.hidden_size),
+            requires_grad=False,
+        )
+        traj_pos_embed = get_1d_sincos_temp_embed(self.hidden_size, self.traj_len)
+        self.traj_pos_embed.data.copy_(torch.from_numpy(traj_pos_embed).float().unsqueeze(0))
+
+        if self.use_token_planning_head:
+            self.traj_final_layer = nn.Sequential(
+                nn.LayerNorm(self.hidden_size),
+                nn.Linear(self.hidden_size, self.num_command_modes * self.traj_dim),
+            )
+
+    def _encode_traj_tokens(self, traj_t):
+        traj_tokens = self._encode_traj(traj_t)
+        if traj_tokens.dim() == 2:
+            traj_tokens = traj_tokens[:, None, :].expand(-1, self.traj_len, -1)
+        if traj_tokens.shape[1] != self.traj_len:
+            raise ValueError(
+                f"JointDomeV3 expects {self.traj_len} trajectory tokens, "
+                f"got {traj_tokens.shape[1]}. Set trajectory_encoder.do_proj=False."
+            )
+        return traj_tokens + self.traj_pos_embed.to(device=traj_tokens.device, dtype=traj_tokens.dtype)
+
+    def _decode_traj(self, traj_tokens, commands):
+        if self.use_token_planning_head:
+            traj_modes = self.traj_final_layer(traj_tokens)
+            traj_modes = rearrange(
+                traj_modes,
+                "b f (m d) -> b m f d",
+                m=self.num_command_modes,
+                d=self.traj_dim,
+            )
+        else:
+            traj_summary = traj_tokens.mean(dim=1)
+            traj_modes = self.planning_decoder(self.planning_decoder_norm(traj_summary))
+
+        traj = traj_modes.gather(
+            1,
+            commands.clamp(max=self.num_command_modes - 1)
+            .view(-1, 1, 1, 1)
+            .expand(-1, 1, self.traj_len, self.traj_dim),
+        ).squeeze(1)
+        return traj, traj_modes
+
+    @torch.cuda.amp.autocast()
+    def forward(
+        self,
+        x,
+        t,
+        y=None,
+        text_embedding=None,
+        use_fp16=False,
+        metas=None,
+        pose_st_offset=0,
+        traj_t=None,
+        commands=None,
+    ):
+        if use_fp16:
+            x = x.to(dtype=torch.float16)
+
+        batches, frames, channels, high, weight = x.shape
+        x = rearrange(x, "b f c h w -> (b f) c h w")
+        x = self.x_embedder(x) + self.pos_embed
+
+        t_emb = self.t_embedder(t, use_fp16=use_fp16)
+        commands = self._get_commands(commands, metas, batches, x.device)
+        command_emb = self.command_embedder(commands)
+        cond_base = self.cond_fuser(torch.cat([t_emb, command_emb], dim=-1))
+
+        timestep_spatial = repeat(cond_base, "n d -> (n c) d", c=frames)
+        timestep_temp = repeat(cond_base, "n d -> (n c) d", c=self.pos_embed.shape[1])
+
+        traj_tokens = self._encode_traj_tokens(traj_t)
+
+        for i in range(0, len(self.blocks), 2):
+            spatial_block, temp_block = self.blocks[i : i + 2]
+
+            traj_frame_tokens = repeat(traj_tokens, "b k d -> (b f) k d", f=frames)
+            x = torch.cat([traj_frame_tokens, x], dim=1)
+            x = torch.utils.checkpoint.checkpoint(
+                self.ckpt_wrapper(spatial_block),
+                x,
+                timestep_spatial,
+                use_reentrant=False,
+            )
+            traj_frame_tokens, x = x[:, : self.traj_len], x[:, self.traj_len :]
+            traj_tokens = rearrange(
+                traj_frame_tokens,
+                "(b f) k d -> b f k d",
+                b=batches,
+            ).mean(dim=1)
+
+            x = rearrange(x, "(b f) t d -> (b t) f d", b=batches)
+            if i == 0:
+                x = x + self.temp_embed[:, :frames]
+
+            x = torch.utils.checkpoint.checkpoint(
+                self.ckpt_wrapper(temp_block),
+                x,
+                timestep_temp,
+                use_reentrant=False,
+            )
+            x = rearrange(x, "(b t) f d -> (b f) t d", b=batches)
+
+        x = self.final_layer(x, timestep_spatial)
+        occ = self.unpatchify(x)
+        occ = rearrange(occ, "(b f) c h w -> b f c h w", b=batches)
+
+        traj, traj_modes = self._decode_traj(traj_tokens, commands)
 
         return {
             "occ": occ,
