@@ -2,6 +2,8 @@ _base_ = ['./train_dome_joint_flow_resample.py']
 
 work_dir = './work_dir/dome-cfmv5_resample'
 
+find_unused_parameters = True
+
 sample = dict(
     traj_loss_weight=1.0,
 )
