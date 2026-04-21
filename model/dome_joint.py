@@ -309,3 +309,102 @@ class JointDomeV3(JointDome):
             "traj_modes": traj_modes,
             "commands": commands,
         }
+
+
+@MODELS.register_module()
+class JointDomeV4(JointDomeV3):
+    """Joint DOME with unified spatial-temporal attention over occ + traj tokens.
+
+    Exploits ``traj_len == frames`` so that each trajectory token can be assigned
+    to exactly one frame.  The trajectory tokens are concatenated with the
+    occupancy patch tokens *before* the transformer loop, and the loop body is
+    the plain alternating spatial / temporal attention used in the base
+    :class:`Dome`.  After the loop the two streams are split and sent to their
+    respective decoders.
+    """
+
+    @torch.cuda.amp.autocast()
+    def forward(
+        self,
+        x,
+        t,
+        y=None,
+        text_embedding=None,
+        use_fp16=False,
+        metas=None,
+        pose_st_offset=0,
+        traj_t=None,
+        commands=None,
+    ):
+        if use_fp16:
+            x = x.to(dtype=torch.float16)
+
+        batches, frames, channels, high, weight = x.shape
+        assert frames == self.traj_len, (
+            f"JointDomeV4 requires frames == traj_len, got {frames} vs {self.traj_len}"
+        )
+
+        # --- patch embedding: [(B*F), T, D] --------------------------------
+        x = rearrange(x, "b f c h w -> (b f) c h w")
+        x = self.x_embedder(x) + self.pos_embed
+        num_patches = x.shape[1]  # T
+
+        # --- condition -------------------------------------------------------
+        t_emb = self.t_embedder(t, use_fp16=use_fp16)
+        commands = self._get_commands(commands, metas, batches, x.device)
+        command_emb = self.command_embedder(commands)
+        cond_base = self.cond_fuser(torch.cat([t_emb, command_emb], dim=-1))
+
+        # spatial cond has (B*F) entries; temporal cond has (B*(T+1)) entries
+        timestep_spatial = repeat(cond_base, "n d -> (n c) d", c=frames)
+        timestep_temp = repeat(cond_base, "n d -> (n c) d", c=num_patches + 1)
+
+        # --- encode trajectory tokens: [B, K, D] → [(B*F), 1, D] -----------
+        traj_tokens = self._encode_traj_tokens(traj_t)  # [B, K=F, D]
+        traj_tokens = rearrange(traj_tokens, "b f d -> (b f) 1 d")
+
+        # --- concat traj token with occ tokens: [(B*F), T+1, D] -------------
+        x = torch.cat([traj_tokens, x], dim=1)
+
+        # --- transformer loop (same structure as Dome.forward) ---------------
+        for i in range(0, len(self.blocks), 2):
+            spatial_block, temp_block = self.blocks[i : i + 2]
+
+            x = torch.utils.checkpoint.checkpoint(
+                self.ckpt_wrapper(spatial_block),
+                x,
+                timestep_spatial,
+                use_reentrant=False,
+            )
+
+            x = rearrange(x, "(b f) t d -> (b t) f d", b=batches)
+            if i == 0:
+                x = x + self.temp_embed[:, :frames]
+
+            x = torch.utils.checkpoint.checkpoint(
+                self.ckpt_wrapper(temp_block),
+                x,
+                timestep_temp,
+                use_reentrant=False,
+            )
+            x = rearrange(x, "(b t) f d -> (b f) t d", b=batches)
+
+        # --- split traj / occ tokens ----------------------------------------
+        traj_tokens = x[:, :1, :]   # [(B*F), 1, D]
+        x = x[:, 1:, :]             # [(B*F), T, D]
+
+        # --- occ decoder -----------------------------------------------------
+        x = self.final_layer(x, timestep_spatial)
+        occ = self.unpatchify(x)
+        occ = rearrange(occ, "(b f) c h w -> b f c h w", b=batches)
+
+        # --- traj decoder ----------------------------------------------------
+        traj_tokens = rearrange(traj_tokens, "(b f) 1 d -> b f d", b=batches)
+        traj, traj_modes = self._decode_traj(traj_tokens, commands)
+
+        return {
+            "occ": occ,
+            "traj": traj,
+            "traj_modes": traj_modes,
+            "commands": commands,
+        }
