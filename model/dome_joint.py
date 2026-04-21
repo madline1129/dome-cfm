@@ -408,3 +408,143 @@ class JointDomeV4(JointDomeV3):
             "traj_modes": traj_modes,
             "commands": commands,
         }
+
+
+@MODELS.register_module()
+class JointDomeCFMV5(JointDomeV3):
+    """Joint DOME-CFM v5 with full trajectory tokens kept in the backbone.
+
+    Each occupancy frame receives the full trajectory-token sequence before the
+    transformer loop. The trajectory tokens therefore participate in the same
+    alternating spatial and temporal attention as occupancy tokens. After the
+    loop, only the future-frame copies are pooled over the occupancy-frame
+    dimension and decoded as trajectory.
+    """
+
+    def __init__(
+        self,
+        *args,
+        traj_frame_start=4,
+        traj_pool_type="attention",
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.traj_frame_start = int(traj_frame_start)
+        self.traj_pool_type = traj_pool_type
+
+        if self.traj_pool_type not in ("attention", "mean"):
+            raise ValueError(
+                "JointDomeCFMV5 supports traj_pool_type='attention' or 'mean', "
+                f"got {self.traj_pool_type!r}."
+            )
+        if self.traj_pool_type == "attention":
+            self.traj_frame_pool = nn.Sequential(
+                nn.LayerNorm(self.hidden_size),
+                nn.Linear(self.hidden_size, 1),
+            )
+
+    def _pool_future_traj_tokens(self, traj_tokens, frames):
+        future_start = self.traj_frame_start
+        future_end = future_start + self.traj_len
+        if future_start < 0 or future_end > frames:
+            raise ValueError(
+                "JointDomeCFMV5 requires 0 <= traj_frame_start and "
+                "traj_frame_start + traj_len <= frames, got "
+                f"{future_start} + {self.traj_len} > {frames}."
+            )
+
+        future_traj_tokens = traj_tokens[:, future_start:future_end]
+        if self.traj_pool_type == "mean":
+            return future_traj_tokens.mean(dim=1)
+
+        pool_logits = self.traj_frame_pool(future_traj_tokens).squeeze(-1)
+        pool_weights = pool_logits.softmax(dim=1)
+        return (future_traj_tokens * pool_weights.unsqueeze(-1)).sum(dim=1)
+
+    @torch.cuda.amp.autocast()
+    def forward(
+        self,
+        x,
+        t,
+        y=None,
+        text_embedding=None,
+        use_fp16=False,
+        metas=None,
+        pose_st_offset=0,
+        traj_t=None,
+        commands=None,
+    ):
+        if use_fp16:
+            x = x.to(dtype=torch.float16)
+
+        batches, frames, channels, high, weight = x.shape
+
+        x = rearrange(x, "b f c h w -> (b f) c h w")
+        x = self.x_embedder(x) + self.pos_embed
+        num_patches = x.shape[1]
+
+        t_emb = self.t_embedder(t, use_fp16=use_fp16)
+        commands = self._get_commands(commands, metas, batches, x.device)
+        command_emb = self.command_embedder(commands)
+        cond_base = self.cond_fuser(torch.cat([t_emb, command_emb], dim=-1))
+
+        timestep_spatial = repeat(cond_base, "n d -> (n c) d", c=frames)
+        timestep_temp = repeat(
+            cond_base,
+            "n d -> (n c) d",
+            c=num_patches + self.traj_len,
+        )
+
+        traj_tokens = self._encode_traj_tokens(traj_t)
+        traj_frame_tokens = repeat(traj_tokens, "b k d -> (b f) k d", f=frames)
+        x = torch.cat([traj_frame_tokens, x], dim=1)
+
+        for i in range(0, len(self.blocks), 2):
+            spatial_block, temp_block = self.blocks[i : i + 2]
+
+            x = torch.utils.checkpoint.checkpoint(
+                self.ckpt_wrapper(spatial_block),
+                x,
+                timestep_spatial,
+                use_reentrant=False,
+            )
+
+            x = rearrange(x, "(b f) t d -> (b t) f d", b=batches)
+            if i == 0:
+                x = x + self.temp_embed[:, :frames]
+
+            x = torch.utils.checkpoint.checkpoint(
+                self.ckpt_wrapper(temp_block),
+                x,
+                timestep_temp,
+                use_reentrant=False,
+            )
+            x = rearrange(x, "(b t) f d -> (b f) t d", b=batches)
+
+        traj_tokens, x = x[:, : self.traj_len, :], x[:, self.traj_len :, :]
+
+        x = self.final_layer(x, timestep_spatial)
+        occ = self.unpatchify(x)
+        occ = rearrange(occ, "(b f) c h w -> b f c h w", b=batches)
+
+        traj_tokens = rearrange(
+            traj_tokens,
+            "(b f) k d -> b f k d",
+            b=batches,
+        )
+        traj_tokens = self._pool_future_traj_tokens(traj_tokens, frames)
+        traj, traj_modes = self._decode_traj(traj_tokens, commands)
+
+        return {
+            "occ": occ,
+            "traj": traj,
+            "traj_modes": traj_modes,
+            "commands": commands,
+        }
+
+
+@MODELS.register_module()
+class JointDomeV5(JointDomeCFMV5):
+    """Registry alias for JointDomeCFMV5."""
+
+    pass

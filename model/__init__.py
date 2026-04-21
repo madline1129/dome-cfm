@@ -5,4 +5,4 @@ from .pose_encoder import PoseEncoder,PoseEncoder_fourier
 from .pose_decoder import PoseDecoder
 
 from .dome import Dome
-from .dome_joint import JointDome, JointDomeV3
+from .dome_joint import JointDome, JointDomeV3, JointDomeV4, JointDomeCFMV5, JointDomeV5
