@@ -59,6 +59,7 @@ if __name__ == "__main__":
     parser.add_argument("--load_from", type=str, default=None)
     parser.add_argument("--vae_load_from", type=str, default=None)
     parser.add_argument("--ema", type=bool, default=True)
+    parser.add_argument("--batch-size", type=int, default=None)
     args = parser.parse_args()
 
     ngpus = torch.cuda.device_count()

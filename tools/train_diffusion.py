@@ -201,6 +201,8 @@ def main(local_rank, args):
     cfg = Config.fromfile(args.py_config)
     cfg.work_dir = args.work_dir
     cfg.ema=args.ema
+    if hasattr(args, 'batch_size') and args.batch_size is not None:
+        cfg.train_loader.batch_size = args.batch_size
 
     # init DDP
     if args.gpus > 1:
