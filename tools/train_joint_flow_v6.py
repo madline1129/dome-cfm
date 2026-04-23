@@ -50,8 +50,8 @@ if __name__ == "__main__":
     base_train.build_generation_process = build_generation_process
 
     parser = argparse.ArgumentParser(description="")
-    parser.add_argument("--py-config", default="config/train_dome_joint_flow_resample.py")
-    parser.add_argument("--work-dir", type=str, default="./work_dir/dome_joint_flow_resample")
+    parser.add_argument("--py-config", default="config/train_dome_cfmv6.py")
+    parser.add_argument("--work-dir", type=str, default="./work_dir/dome-cfmv6")
     parser.add_argument("--tb-dir", type=str, default=None)
     parser.add_argument("--resume-from", type=str, default="")
     parser.add_argument("--iter-resume", action="store_true", default=False)

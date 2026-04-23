@@ -31,6 +31,11 @@ class JointTrajectoryOccupancyFlowMatching:
         traj_len=6,
         traj_dim=2,
         traj_loss_weight=10.0,
+        use_hist_traj_condition=False,
+        hist_traj_key="rel_poses",
+        hist_traj_start_index=0,
+        hist_traj_len=4,
+        hist_condition_drop_prob=0.0,
         num_command_modes=3,
         command_lateral_index=0,
         command_fallback_threshold=0.5,
@@ -45,6 +50,11 @@ class JointTrajectoryOccupancyFlowMatching:
         self.traj_len = int(traj_len)
         self.traj_dim = int(traj_dim)
         self.traj_loss_weight = float(traj_loss_weight)
+        self.use_hist_traj_condition = bool(use_hist_traj_condition)
+        self.hist_traj_key = hist_traj_key
+        self.hist_traj_start_index = int(hist_traj_start_index)
+        self.hist_traj_len = int(hist_traj_len)
+        self.hist_condition_drop_prob = float(hist_condition_drop_prob)
         self.num_command_modes = int(num_command_modes)
         self.command_lateral_index = int(command_lateral_index)
         self.command_fallback_threshold = float(command_fallback_threshold)
@@ -111,6 +121,24 @@ class JointTrajectoryOccupancyFlowMatching:
         )
         return traj_start, commands
 
+    def _history_from_kwargs(self, model_kwargs, x_start):
+        if not self.use_hist_traj_condition:
+            return None
+
+        metas = (model_kwargs or {}).get("metas")
+        if metas is None:
+            return None
+
+        return extract_trajectory_from_metas(
+            metas,
+            key=self.hist_traj_key,
+            start_index=self.hist_traj_start_index,
+            traj_len=self.hist_traj_len,
+            traj_dim=self.traj_dim,
+            device=x_start.device,
+            dtype=x_start.dtype,
+        )
+
     def training_losses(self, model, x_start, t=None, model_kwargs=None, noise=None):
         if model_kwargs is None:
             model_kwargs = {}
@@ -118,6 +146,7 @@ class JointTrajectoryOccupancyFlowMatching:
             noise = th.randn_like(x_start)
 
         traj_start, commands = self._targets_from_kwargs(model_kwargs, x_start)
+        hist_traj = self._history_from_kwargs(model_kwargs, x_start)
         traj_noise = th.randn_like(traj_start)
 
         t = th.rand(x_start.shape[0], device=x_start.device, dtype=x_start.dtype)
@@ -129,12 +158,23 @@ class JointTrajectoryOccupancyFlowMatching:
         if self.replace_cond_frames:
             x_t = cond_mask_bc * x_start + (1 - cond_mask_bc) * x_t
 
-        model_output = model(
-            x_t,
-            self._model_time(t),
+        model_inputs = dict(
             traj_t=traj_t,
             commands=commands,
             **model_kwargs,
+        )
+        if self.use_hist_traj_condition:
+            model_inputs["hist_traj"] = hist_traj
+            model_inputs["hist_drop_mask"] = (
+                th.rand(x_start.shape[0], device=x_start.device) < self.hist_condition_drop_prob
+                if self.hist_condition_drop_prob > 0
+                else None
+            )
+
+        model_output = model(
+            x_t,
+            self._model_time(t),
+            **model_inputs,
         )
         pred_occ, pred_traj, pred_traj_modes = self._split_model_output(model_output)
         assert pred_occ.shape == u_occ.shape == x_start.shape
@@ -230,9 +270,11 @@ class JointTrajectoryOccupancyFlowMatching:
         if metas is None:
             traj = th.randn(shape[0], self.traj_len, self.traj_dim, device=device, dtype=img.dtype)
             commands = th.full((shape[0],), 2, device=device, dtype=th.long)
+            hist_traj = None
         else:
             traj_start, commands = self._targets_from_kwargs(model_kwargs, img)
             traj = th.randn_like(traj_start)
+            hist_traj = self._history_from_kwargs(model_kwargs, img)
 
         cond_mask = None
         cond_frame = None
@@ -260,12 +302,18 @@ class JointTrajectoryOccupancyFlowMatching:
             t = th.full((shape[0],), times[i].item(), device=device, dtype=img.dtype)
             dt = times[i + 1] - times[i]
             with th.no_grad():
-                model_output = model(
-                    img,
-                    self._model_time(t),
+                model_inputs = dict(
                     traj_t=traj,
                     commands=commands,
                     **model_kwargs,
+                )
+                if self.use_hist_traj_condition:
+                    model_inputs["hist_traj"] = hist_traj
+
+                model_output = model(
+                    img,
+                    self._model_time(t),
+                    **model_inputs,
                 )
                 velocity, traj_velocity, traj_velocity_modes = self._split_model_output(model_output)
                 if traj_velocity is None:

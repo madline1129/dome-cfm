@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JointDomeCFMV5 Flowchart</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #5d667a;
+      --line: #8590a6;
+      --panel: #ffffff;
+      --blue: #d8e9ff;
+      --blue-stroke: #5d8dca;
+      --green: #dff3e3;
+      --green-stroke: #61a76c;
+      --amber: #fff0c9;
+      --amber-stroke: #c79431;
+      --rose: #ffe2e2;
+      --rose-stroke: #c56767;
+      --violet: #eadfff;
+      --violet-stroke: #846ac2;
+      --gray: #eef1f5;
+      --gray-stroke: #7c879a;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: #f5f7fb;
+    }
+
+    main {
+      width: min(1280px, 100%);
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 26px;
+      line-height: 1.25;
+      font-weight: 750;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .canvas {
+      overflow-x: auto;
+      border: 1px solid #d8dde8;
+      background: var(--panel);
+      border-radius: 8px;
+      box-shadow: 0 12px 28px rgba(23, 32, 51, 0.08);
+    }
+
+    svg {
+      display: block;
+      min-width: 1180px;
+      height: auto;
+    }
+
+    .box {
+      stroke-width: 1.5;
+      rx: 8;
+      ry: 8;
+    }
+
+    .small {
+      font-size: 12px;
+      fill: var(--muted);
+    }
+
+    .label {
+      font-size: 15px;
+      font-weight: 700;
+      fill: var(--ink);
+    }
+
+    .note {
+      font-size: 13px;
+      fill: var(--muted);
+    }
+
+    .shape {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+        "Liberation Mono", monospace;
+      font-size: 12px;
+      fill: #344056;
+    }
+
+    .arrow {
+      stroke: var(--line);
+      stroke-width: 1.8;
+      fill: none;
+      marker-end: url(#arrow);
+    }
+
+    .arrow-strong {
+      stroke: #455168;
+      stroke-width: 2.2;
+      fill: none;
+      marker-end: url(#arrow-strong);
+    }
+
+    .group-title {
+      font-size: 14px;
+      font-weight: 750;
+      fill: #2d374d;
+    }
+
+    .legend {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .swatch {
+      width: 18px;
+      height: 12px;
+      border-radius: 3px;
+      border: 1px solid currentColor;
+      flex: 0 0 auto;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>JointDomeCFMV5 前向流程图</h1>
+    <p class="subtitle">
+      形状按当前配置标注：B=batch，F=11，C=64，H=W=25，P=625，K=traj_len=6，D=768，M=3 个 command mode。
+    </p>
+
+    <div class="canvas">
+      <svg viewBox="0 0 1180 980" role="img" aria-label="JointDomeCFMV5 forward flowchart">
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+            <path d="M0,0 L10,4 L0,8 Z" fill="#8590a6"></path>
+          </marker>
+          <marker id="arrow-strong" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+            <path d="M0,0 L10,4 L0,8 Z" fill="#455168"></path>
+          </marker>
+        </defs>
+
+        <!-- Inputs -->
+        <rect x="44" y="54" width="250" height="92" class="box" fill="var(--blue)" stroke="var(--blue-stroke)"></rect>
+        <text x="64" y="86" class="label">occupancy latent x_t</text>
+        <text x="64" y="112" class="shape">[B, F, C, H, W]</text>
+        <text x="64" y="132" class="small">noised world latent</text>
+
+        <rect x="44" y="180" width="250" height="92" class="box" fill="var(--green)" stroke="var(--green-stroke)"></rect>
+        <text x="64" y="212" class="label">trajectory traj_t</text>
+        <text x="64" y="238" class="shape">[B, K, 2]</text>
+        <text x="64" y="258" class="small">noised future ego deltas</text>
+
+        <rect x="44" y="306" width="250" height="92" class="box" fill="var(--amber)" stroke="var(--amber-stroke)"></rect>
+        <text x="64" y="338" class="label">time t + command</text>
+        <text x="64" y="364" class="shape">t: [B], command: [B]</text>
+        <text x="64" y="384" class="small">flow time and turn mode</text>
+
+        <!-- Embeddings -->
+        <rect x="374" y="54" width="260" height="92" class="box" fill="var(--blue)" stroke="var(--blue-stroke)"></rect>
+        <text x="394" y="86" class="label">PatchEmbed + pos_embed</text>
+        <text x="394" y="112" class="shape">[B*F, P, D]</text>
+        <text x="394" y="132" class="small">P = 25 * 25 = 625</text>
+
+        <rect x="374" y="180" width="260" height="92" class="box" fill="var(--green)" stroke="var(--green-stroke)"></rect>
+        <text x="394" y="212" class="label">PoseEncoder_fourier</text>
+        <text x="394" y="238" class="shape">[B, K, D]</text>
+        <text x="394" y="258" class="small">do_proj=False，保留 6 个 token</text>
+
+        <rect x="374" y="306" width="260" height="92" class="box" fill="var(--amber)" stroke="var(--amber-stroke)"></rect>
+        <text x="394" y="338" class="label">cond_fuser</text>
+        <text x="394" y="364" class="shape">cat(t_emb, cmd_emb) -> [B, D]</text>
+        <text x="394" y="384" class="small">AdaLN 的基础条件 cond_base</text>
+
+        <path d="M294 100 H374" class="arrow"></path>
+        <path d="M294 226 H374" class="arrow"></path>
+        <path d="M294 352 H374" class="arrow"></path>
+
+        <!-- Condition replication -->
+        <rect x="704" y="278" width="300" height="134" class="box" fill="var(--amber)" stroke="var(--amber-stroke)"></rect>
+        <text x="724" y="310" class="label">复制成两套 AdaLN 条件</text>
+        <text x="724" y="338" class="shape">spatial: [B*F, D]</text>
+        <text x="724" y="362" class="shape">temporal: [B*(P+K), D]</text>
+        <text x="724" y="386" class="small">同一个 cond_base，只是为了匹配 block 输入 shape</text>
+
+        <path d="M634 352 H704" class="arrow"></path>
+
+        <!-- Token concat -->
+        <rect x="704" y="90" width="300" height="144" class="box" fill="var(--violet)" stroke="var(--violet-stroke)"></rect>
+        <text x="724" y="122" class="label">拼接 trajectory tokens</text>
+        <text x="724" y="150" class="shape">traj: [B,K,D] -> [B*F,K,D]</text>
+        <text x="724" y="174" class="shape">occ:  [B*F,P,D]</text>
+        <text x="724" y="198" class="shape">cat -> [B*F, P+K, D]</text>
+        <text x="724" y="218" class="small">每一帧都拿到完整 6 个未来轨迹 token</text>
+
+        <path d="M634 100 C662 100 674 138 704 138" class="arrow"></path>
+        <path d="M634 226 C664 226 674 190 704 190" class="arrow"></path>
+
+        <!-- Backbone group -->
+        <rect x="168" y="470" width="844" height="266" rx="12" ry="12" fill="#fbfcff" stroke="#cfd6e4" stroke-width="1.5"></rect>
+        <text x="190" y="504" class="group-title">重复 depth/2 次：spatial block + temporal block</text>
+
+        <rect x="218" y="542" width="270" height="116" class="box" fill="var(--violet)" stroke="var(--violet-stroke)"></rect>
+        <text x="238" y="574" class="label">Spatial TransformerBlock</text>
+        <text x="238" y="600" class="shape">input: [B*F, P+K, D]</text>
+        <text x="238" y="622" class="small">同一帧内：occupancy patch 和 traj token 互相 attention</text>
+
+        <rect x="560" y="542" width="220" height="116" class="box" fill="var(--gray)" stroke="var(--gray-stroke)"></rect>
+        <text x="580" y="574" class="label">reshape + temp_embed</text>
+        <text x="580" y="600" class="shape">[B*F,P+K,D]</text>
+        <text x="580" y="624" class="shape">-> [B*(P+K),F,D]</text>
+
+        <rect x="842" y="542" width="130" height="116" class="box" fill="var(--violet)" stroke="var(--violet-stroke)"></rect>
+        <text x="862" y="574" class="label">Temporal</text>
+        <text x="862" y="596" class="label">Block</text>
+        <text x="862" y="624" class="shape">[B*(P+K),F,D]</text>
+        <text x="862" y="646" class="small">跨帧 attention</text>
+
+        <path d="M854 234 C854 314 353 314 353 542" class="arrow-strong"></path>
+        <path d="M854 412 C854 450 353 450 353 542" class="arrow"></path>
+        <path d="M488 600 H560" class="arrow-strong"></path>
+        <path d="M780 600 H842" class="arrow-strong"></path>
+        <path d="M907 658 C907 704 178 704 218 600" class="arrow"></path>
+        <text x="438" y="704" class="note">temporal 后 reshape 回 [B*F, P+K, D]，进入下一组 block</text>
+
+        <!-- Split -->
+        <rect x="374" y="792" width="432" height="76" class="box" fill="var(--gray)" stroke="var(--gray-stroke)"></rect>
+        <text x="394" y="824" class="label">split</text>
+        <text x="394" y="850" class="shape">traj_tokens: [B*F,K,D]     occ_tokens: [B*F,P,D]</text>
+
+        <path d="M590 736 V792" class="arrow-strong"></path>
+
+        <!-- Outputs -->
+        <rect x="106" y="900" width="330" height="62" class="box" fill="var(--blue)" stroke="var(--blue-stroke)"></rect>
+        <text x="126" y="925" class="label">occupancy velocity</text>
+        <text x="126" y="948" class="shape">final_layer + unpatchify -> [B,F,64,25,25]</text>
+
+        <rect x="742" y="900" width="330" height="62" class="box" fill="var(--green)" stroke="var(--green-stroke)"></rect>
+        <text x="762" y="925" class="label">trajectory velocity</text>
+        <text x="762" y="948" class="shape">future pool + decode -> [B,6,2]</text>
+
+        <rect x="744" y="782" width="330" height="82" class="box" fill="var(--green)" stroke="var(--green-stroke)"></rect>
+        <text x="764" y="812" class="label">pool future frame copies</text>
+        <text x="764" y="838" class="shape">[B,F,K,D] -> frames[4:10] -> [B,K,D]</text>
+        <text x="764" y="858" class="small">attention pooling over future frame dimension</text>
+
+        <path d="M474 868 C420 892 350 900 271 900" class="arrow"></path>
+        <path d="M706 830 H744" class="arrow"></path>
+        <path d="M909 864 V900" class="arrow"></path>
+
+        <!-- Loss annotation -->
+        <rect x="858" y="34" width="250" height="40" class="box" fill="var(--rose)" stroke="var(--rose-stroke)"></rect>
+        <text x="876" y="59" class="note">训练目标：预测 occ / traj 的 flow velocity</text>
+      </svg>
+    </div>
+
+    <div class="legend" aria-label="legend">
+      <span><i class="swatch" style="background: var(--blue); color: var(--blue-stroke);"></i>occupancy 分支</span>
+      <span><i class="swatch" style="background: var(--green); color: var(--green-stroke);"></i>trajectory 分支</span>
+      <span><i class="swatch" style="background: var(--amber); color: var(--amber-stroke);"></i>timestep + command AdaLN 条件</span>
+      <span><i class="swatch" style="background: var(--violet); color: var(--violet-stroke);"></i>joint token transformer backbone</span>
+    </div>
+  </main>
+</body>
+</html>

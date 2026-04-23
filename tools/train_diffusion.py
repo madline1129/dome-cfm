@@ -34,6 +34,102 @@ def tb_safe_name(name):
     return str(name).replace('/', '_')
 
 
+def _starts_with_any(name, prefixes):
+    return any(name == prefix or name.startswith(f"{prefix}.") for prefix in prefixes)
+
+
+def set_finetune_trainable_state(model, finetune_cfg, epoch, logger=None):
+    if not finetune_cfg or not finetune_cfg.get('enabled', False):
+        return
+
+    freeze_prefixes = finetune_cfg.get(
+        'freeze_prefixes',
+        ['x_embedder', 't_embedder', 'blocks', 'final_layer'],
+    )
+    always_freeze_prefixes = finetune_cfg.get(
+        'always_freeze_prefixes',
+        ['pos_embed', 'temp_embed'],
+    )
+    freeze_epochs = int(finetune_cfg.get('freeze_epochs', 0))
+    freeze_active = epoch < freeze_epochs
+
+    for name, param in model.named_parameters():
+        if _starts_with_any(name, always_freeze_prefixes):
+            param.requires_grad = False
+        elif _starts_with_any(name, freeze_prefixes):
+            param.requires_grad = not freeze_active
+        else:
+            param.requires_grad = True
+
+    if logger is not None:
+        status = 'frozen' if freeze_active else 'unfrozen'
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        logger.info(
+            f'[FINETUNE] epoch={epoch} occ_backbone={status}, '
+            f'trainable_params={trainable}'
+        )
+
+
+def build_finetune_optimizer(model, optimizer_cfg, finetune_cfg, logger=None):
+    opt_cfg = deepcopy(optimizer_cfg.get('optimizer', optimizer_cfg))
+    opt_type = opt_cfg.pop('type', 'AdamW')
+    if opt_type != 'AdamW':
+        raise NotImplementedError(
+            f"finetune optimizer currently only supports AdamW, got {opt_type}"
+        )
+
+    base_lr = float(opt_cfg.pop('lr'))
+    backbone_prefixes = finetune_cfg.get(
+        'backbone_prefixes',
+        ['x_embedder', 't_embedder', 'blocks', 'final_layer', 'pos_embed', 'temp_embed'],
+    )
+    backbone_lr_mult = float(finetune_cfg.get('backbone_lr_mult', 0.1))
+    new_module_lr_mult = float(finetune_cfg.get('new_module_lr_mult', 1.0))
+
+    backbone_params = []
+    new_module_params = []
+    backbone_names = []
+    new_module_names = []
+
+    for name, param in model.named_parameters():
+        if _starts_with_any(name, backbone_prefixes):
+            backbone_params.append(param)
+            backbone_names.append(name)
+        else:
+            new_module_params.append(param)
+            new_module_names.append(name)
+
+    param_groups = []
+    if backbone_params:
+        param_groups.append(
+            dict(
+                params=backbone_params,
+                lr=base_lr * backbone_lr_mult,
+                group_name='backbone',
+            )
+        )
+    if new_module_params:
+        param_groups.append(
+            dict(
+                params=new_module_params,
+                lr=base_lr * new_module_lr_mult,
+                group_name='joint_new',
+            )
+        )
+
+    if logger is not None:
+        logger.info(
+            f"[FINETUNE] optimizer groups: backbone_lr={base_lr * backbone_lr_mult:.7f}, "
+            f"joint_new_lr={base_lr * new_module_lr_mult:.7f}"
+        )
+        logger.info(
+            f"[FINETUNE] backbone group params={len(backbone_names)}, "
+            f"new group params={len(new_module_names)}"
+        )
+
+    return torch.optim.AdamW(param_groups, lr=base_lr, **opt_cfg)
+
+
 def write_multistep_iou_to_tensorboard(writer, prefix, metric, global_iter):
     per_class_iou = metric.get_per_class_iou().detach().cpu()
     for t in range(per_class_iou.shape[0]):
@@ -68,6 +164,11 @@ def build_generation_process(cfg, timestep_respacing):
             traj_len=cfg.sample.get('traj_len', 6),
             traj_dim=cfg.sample.get('traj_dim', 2),
             traj_loss_weight=cfg.sample.get('traj_loss_weight', 10.0),
+            use_hist_traj_condition=cfg.sample.get('use_hist_traj_condition', False),
+            hist_traj_key=cfg.sample.get('hist_traj_key', cfg.sample.get('traj_key', 'rel_poses')),
+            hist_traj_start_index=cfg.sample.get('hist_traj_start_index', 0),
+            hist_traj_len=cfg.sample.get('hist_traj_len', cfg.sample.get('n_conds', 0)),
+            hist_condition_drop_prob=cfg.sample.get('hist_condition_drop_prob', 0.0),
             num_command_modes=cfg.sample.get('num_command_modes', 3),
             command_lateral_index=cfg.sample.get('command_lateral_index', 0),
             command_fallback_threshold=cfg.sample.get('command_fallback_threshold', 0.5),
@@ -146,6 +247,7 @@ def main(local_rank, args):
     my_model = MODELS.build(cfg.model.world_model)
     # my_model.init_weights()
     vae=MODELS.build(cfg.model.vae).cuda()
+    finetune_cfg = cfg.get('finetune', None)
 
     n_parameters = sum(p.numel() for p in my_model.parameters() if p.requires_grad)
     logger.info(f'Number of params: {n_parameters}')
@@ -177,6 +279,8 @@ def main(local_rank, args):
         raw_model = my_model
     logger.info('done ddp model')
 
+    set_finetune_trainable_state(raw_model, finetune_cfg, epoch=0, logger=logger)
+
     diffusion = build_generation_process(cfg, timestep_respacing="")
     diffusion_eval = build_generation_process(cfg, timestep_respacing=str(cfg.sample.num_sampling_steps))
     vae.requires_grad_(False)
@@ -193,7 +297,10 @@ def main(local_rank, args):
         )
 
     # get optimizer, loss, scheduler
-    optimizer = build_optim_wrapper(my_model, cfg.optimizer)
+    if finetune_cfg and finetune_cfg.get('enabled', False):
+        optimizer = build_finetune_optimizer(raw_model, cfg.optimizer, finetune_cfg, logger=logger)
+    else:
+        optimizer = build_optim_wrapper(my_model, cfg.optimizer)
     loss_func = OPENOCC_LOSS.build(cfg.loss).cuda()
     max_num_epochs = cfg.max_epochs
     if cfg.get('multisteplr', False):
@@ -230,6 +337,8 @@ def main(local_rank, args):
     logger.info('load from: ' + cfg.load_from)
     logger.info('vae_load_from: ' + cfg.vae_load_from)
     logger.info('work dir: ' + args.work_dir)
+    if finetune_cfg and finetune_cfg.get('enabled', False) and finetune_cfg.get('require_load_from', False):
+        assert cfg.load_from, "finetune.enabled=True requires --load_from / cfg.load_from"
 
     is_resume=False
     # load DiT
@@ -303,6 +412,7 @@ def main(local_rank, args):
         ema.eval()  # EMA model should always be in eval mode
 
     while epoch < max_num_epochs:
+        set_finetune_trainable_state(raw_model, finetune_cfg, epoch=epoch, logger=logger if local_rank == 0 else None)
         
         my_model.train()
         os.environ['eval'] = 'false'

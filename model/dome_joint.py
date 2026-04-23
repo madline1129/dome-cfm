@@ -548,3 +548,212 @@ class JointDomeV5(JointDomeCFMV5):
     """Registry alias for JointDomeCFMV5."""
 
     pass
+
+
+@MODELS.register_module()
+class JointDomeCFMV6(JointDomeV3):
+    """Joint DOME-CFM v6 with frame-aligned trajectory tokens.
+
+    History trajectory is used as a condition on the observed frames, while
+    future trajectory remains the joint flow target on future frames. Each
+    frame receives exactly one trajectory token instead of the full trajectory
+    sequence being broadcast to every frame.
+    """
+
+    def __init__(
+        self,
+        *args,
+        hist_frame_start=0,
+        hist_len=4,
+        traj_frame_start=4,
+        use_hist_cfg=True,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.hist_frame_start = int(hist_frame_start)
+        self.hist_len = int(hist_len)
+        self.traj_frame_start = int(traj_frame_start)
+        self.use_hist_cfg = bool(use_hist_cfg)
+
+        self.frame_traj_pos_embed = nn.Parameter(
+            torch.zeros(1, self.num_frames, self.hidden_size),
+            requires_grad=False,
+        )
+        frame_pos_embed = get_1d_sincos_temp_embed(self.hidden_size, self.num_frames)
+        self.frame_traj_pos_embed.data.copy_(
+            torch.from_numpy(frame_pos_embed).float().unsqueeze(0)
+        )
+        self.null_traj_token = nn.Parameter(torch.zeros(1, 1, self.hidden_size))
+
+    def _encode_traj_sequence(self, traj):
+        if traj is None:
+            return None
+        traj_tokens = self._encode_traj(traj)
+        if traj_tokens.dim() == 2:
+            traj_tokens = traj_tokens[:, None, :]
+        return traj_tokens
+
+    def _scatter_tokens(self, frame_tokens, encoded_tokens, start_index, batch_mask=None):
+        if encoded_tokens is None:
+            return frame_tokens
+
+        seq_len = encoded_tokens.shape[1]
+        end_index = start_index + seq_len
+        if start_index < 0 or end_index > frame_tokens.shape[1]:
+            raise ValueError(
+                f"trajectory token range [{start_index}, {end_index}) exceeds num_frames="
+                f"{frame_tokens.shape[1]}"
+            )
+
+        pos_embed = self.frame_traj_pos_embed[:, start_index:end_index].to(
+            device=encoded_tokens.device,
+            dtype=encoded_tokens.dtype,
+        )
+        encoded_tokens = encoded_tokens + pos_embed
+        if batch_mask is not None:
+            null_tokens = self.null_traj_token.to(
+                device=encoded_tokens.device,
+                dtype=encoded_tokens.dtype,
+            ).expand(encoded_tokens.shape[0], seq_len, -1)
+            encoded_tokens = torch.where(
+                batch_mask[:, None, None],
+                null_tokens,
+                encoded_tokens,
+            )
+        frame_tokens[:, start_index:end_index] = encoded_tokens
+        return frame_tokens
+
+    def _build_frame_traj_tokens(
+        self,
+        *,
+        traj_t,
+        hist_traj,
+        batches,
+        frames,
+        device,
+        dtype,
+        hist_drop_mask=None,
+    ):
+        frame_tokens = self.null_traj_token.to(device=device, dtype=dtype).expand(
+            batches, frames, -1
+        ).clone()
+        frame_tokens = frame_tokens + self.frame_traj_pos_embed[:, :frames].to(
+            device=device,
+            dtype=dtype,
+        )
+
+        hist_tokens = self._encode_traj_sequence(hist_traj)
+        frame_tokens = self._scatter_tokens(
+            frame_tokens,
+            hist_tokens,
+            self.hist_frame_start,
+            batch_mask=hist_drop_mask if self.use_hist_cfg else None,
+        )
+
+        future_tokens = self._encode_traj_sequence(traj_t)
+        frame_tokens = self._scatter_tokens(
+            frame_tokens,
+            future_tokens,
+            self.traj_frame_start,
+        )
+        return frame_tokens
+
+    @torch.cuda.amp.autocast()
+    def forward(
+        self,
+        x,
+        t,
+        y=None,
+        text_embedding=None,
+        use_fp16=False,
+        metas=None,
+        pose_st_offset=0,
+        traj_t=None,
+        hist_traj=None,
+        hist_drop_mask=None,
+        commands=None,
+    ):
+        if use_fp16:
+            x = x.to(dtype=torch.float16)
+
+        batches, frames, channels, high, weight = x.shape
+
+        x = rearrange(x, "b f c h w -> (b f) c h w")
+        x = self.x_embedder(x) + self.pos_embed
+        num_patches = x.shape[1]
+
+        t_emb = self.t_embedder(t, use_fp16=use_fp16)
+        commands = self._get_commands(commands, metas, batches, x.device)
+        command_emb = self.command_embedder(commands)
+        cond_base = self.cond_fuser(torch.cat([t_emb, command_emb], dim=-1))
+
+        timestep_spatial = repeat(cond_base, "n d -> (n c) d", c=frames)
+        timestep_temp = repeat(
+            cond_base,
+            "n d -> (n c) d",
+            c=num_patches + 1,
+        )
+
+        frame_traj_tokens = self._build_frame_traj_tokens(
+            traj_t=traj_t,
+            hist_traj=hist_traj,
+            batches=batches,
+            frames=frames,
+            device=x.device,
+            dtype=x.dtype,
+            hist_drop_mask=hist_drop_mask,
+        )
+        frame_traj_tokens = rearrange(frame_traj_tokens, "b f d -> (b f) 1 d")
+        x = torch.cat([frame_traj_tokens, x], dim=1)
+
+        for i in range(0, len(self.blocks), 2):
+            spatial_block, temp_block = self.blocks[i : i + 2]
+
+            x = torch.utils.checkpoint.checkpoint(
+                self.ckpt_wrapper(spatial_block),
+                x,
+                timestep_spatial,
+                use_reentrant=False,
+            )
+
+            x = rearrange(x, "(b f) t d -> (b t) f d", b=batches)
+            if i == 0:
+                x = x + self.temp_embed[:, :frames]
+
+            x = torch.utils.checkpoint.checkpoint(
+                self.ckpt_wrapper(temp_block),
+                x,
+                timestep_temp,
+                use_reentrant=False,
+            )
+            x = rearrange(x, "(b t) f d -> (b f) t d", b=batches)
+
+        traj_tokens, x = x[:, :1, :], x[:, 1:, :]
+
+        x = self.final_layer(x, timestep_spatial)
+        occ = self.unpatchify(x)
+        occ = rearrange(occ, "(b f) c h w -> b f c h w", b=batches)
+
+        traj_tokens = rearrange(traj_tokens, "(b f) 1 d -> b f d", b=batches)
+        future_end = self.traj_frame_start + self.traj_len
+        if future_end > frames:
+            raise ValueError(
+                f"future trajectory range [{self.traj_frame_start}, {future_end}) exceeds "
+                f"num_frames={frames}"
+            )
+        future_traj_tokens = traj_tokens[:, self.traj_frame_start:future_end]
+        traj, traj_modes = self._decode_traj(future_traj_tokens, commands)
+
+        return {
+            "occ": occ,
+            "traj": traj,
+            "traj_modes": traj_modes,
+            "commands": commands,
+        }
+
+
+@MODELS.register_module()
+class JointDomeV6(JointDomeCFMV6):
+    """Registry alias for JointDomeCFMV6."""
+
+    pass
