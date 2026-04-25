@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JointDomeCFMV6 Flowchart</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #5d667a;
+      --line: #8590a6;
+      --panel: #ffffff;
+      --blue: #d8e9ff;
+      --blue-stroke: #5d8dca;
+      --green: #dff3e3;
+      --green-stroke: #61a76c;
+      --amber: #fff0c9;
+      --amber-stroke: #c79431;
+      --rose: #ffe2e2;
+      --rose-stroke: #c56767;
+      --violet: #eadfff;
+      --violet-stroke: #846ac2;
+      --gray: #eef1f5;
+      --gray-stroke: #7c879a;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: #f5f7fb;
+    }
+
+    main {
+      width: min(1320px, 100%);
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 26px;
+      line-height: 1.25;
+      font-weight: 750;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .canvas {
+      overflow-x: auto;
+      border: 1px solid #d8dde8;
+      background: var(--panel);
+      border-radius: 8px;
+      box-shadow: 0 12px 28px rgba(23, 32, 51, 0.08);
+    }
+
+    svg {
+      display: block;
+      min-width: 1240px;
+      height: auto;
+    }
+
+    .box {
+      stroke-width: 1.5;
+      rx: 8;
+      ry: 8;
+    }
+
+    .small {
+      font-size: 12px;
+      fill: var(--muted);
+    }
+
+    .label {
+      font-size: 15px;
+      font-weight: 700;
+      fill: var(--ink);
+    }
+
+    .note {
+      font-size: 13px;
+      fill: var(--muted);
+    }
+
+    .shape {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+        "Liberation Mono", monospace;
+      font-size: 12px;
+      fill: #344056;
+    }
+
+    .arrow {
+      stroke: var(--line);
+      stroke-width: 1.8;
+      fill: none;
+      marker-end: url(#arrow);
+    }
+
+    .arrow-strong {
+      stroke: #455168;
+      stroke-width: 2.2;
+      fill: none;
+      marker-end: url(#arrow-strong);
+    }
+
+    .group-title {
+      font-size: 14px;
+      font-weight: 750;
+      fill: #2d374d;
+    }
+
+    .legend {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .swatch {
+      width: 18px;
+      height: 12px;
+      border-radius: 3px;
+      border: 1px solid currentColor;
+      flex: 0 0 auto;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>JointDomeCFMV6 前向流程图</h1>
+    <p class="subtitle">
+      当前 v6 的关键改动：历史 4 帧轨迹作为条件，未来 6 帧轨迹作为 joint flow 目标；每一帧只注入 1 个 trajectory token，
+      不再像 v5 那样把完整 future trajectory 序列广播到所有 occ 帧。
+    </p>
+
+    <div class="canvas">
+      <svg viewBox="0 0 1240 1100" role="img" aria-label="JointDomeCFMV6 forward flowchart">
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+            <path d="M0,0 L10,4 L0,8 Z" fill="#8590a6"></path>
+          </marker>
+          <marker id="arrow-strong" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+            <path d="M0,0 L10,4 L0,8 Z" fill="#455168"></path>
+          </marker>
+        </defs>
+
+        <!-- Inputs -->
+        <rect x="42" y="52" width="270" height="92" class="box" fill="var(--blue)" stroke="var(--blue-stroke)"></rect>
+        <text x="62" y="84" class="label">occupancy latent x_t</text>
+        <text x="62" y="110" class="shape">[B, F, C, H, W]</text>
+        <text x="62" y="130" class="small">训练/采样都输入 noised world latent</text>
+
+        <rect x="42" y="172" width="270" height="108" class="box" fill="var(--green)" stroke="var(--green-stroke)"></rect>
+        <text x="62" y="204" class="label">history trajectory hist_traj</text>
+        <text x="62" y="230" class="shape">[B, 4, 2]</text>
+        <text x="62" y="252" class="small">来自 rel_poses[0:4]</text>
+        <text x="62" y="270" class="small">clean condition，可做 history dropout</text>
+
+        <rect x="42" y="308" width="270" height="108" class="box" fill="var(--green)" stroke="var(--green-stroke)"></rect>
+        <text x="62" y="340" class="label">future trajectory traj_t</text>
+        <text x="62" y="366" class="shape">[B, 6, 2]</text>
+        <text x="62" y="388" class="small">来自 rel_poses[4:10]</text>
+        <text x="62" y="406" class="small">joint flow 目标；输入时是 noisy future traj</text>
+
+        <rect x="42" y="444" width="270" height="92" class="box" fill="var(--amber)" stroke="var(--amber-stroke)"></rect>
+        <text x="62" y="476" class="label">time t + command</text>
+        <text x="62" y="502" class="shape">t: [B], command: [B]</text>
+        <text x="62" y="522" class="small">全局 AdaLN 条件</text>
+
+        <!-- Encoders -->
+        <rect x="380" y="52" width="290" height="92" class="box" fill="var(--blue)" stroke="var(--blue-stroke)"></rect>
+        <text x="400" y="84" class="label">PatchEmbed + pos_embed</text>
+        <text x="400" y="110" class="shape">[B*F, P, D]</text>
+        <text x="400" y="130" class="small">P = 25 * 25 = 625</text>
+
+        <rect x="380" y="172" width="290" height="108" class="box" fill="var(--green)" stroke="var(--green-stroke)"></rect>
+        <text x="400" y="204" class="label">history PoseEncoder_fourier</text>
+        <text x="400" y="230" class="shape">hist tokens: [B, 4, D]</text>
+        <text x="400" y="252" class="small">scatter 到 frame 0~3</text>
+        <text x="400" y="270" class="small">drop 时替换为 null traj token</text>
+
+        <rect x="380" y="308" width="290" height="108" class="box" fill="var(--green)" stroke="var(--green-stroke)"></rect>
+        <text x="400" y="340" class="label">future PoseEncoder_fourier</text>
+        <text x="400" y="366" class="shape">future tokens: [B, 6, D]</text>
+        <text x="400" y="388" class="small">scatter 到 frame 4~9</text>
+        <text x="400" y="406" class="small">每个 future frame 对应 1 个 traj token</text>
+
+        <rect x="380" y="444" width="290" height="92" class="box" fill="var(--amber)" stroke="var(--amber-stroke)"></rect>
+        <text x="400" y="476" class="label">cond_fuser</text>
+        <text x="400" y="502" class="shape">cat(t_emb, cmd_emb) -> [B, D]</text>
+        <text x="400" y="522" class="small">给 spatial / temporal block 的 AdaLN 条件</text>
+
+        <path d="M312 98 H380" class="arrow"></path>
+        <path d="M312 226 H380" class="arrow"></path>
+        <path d="M312 362 H380" class="arrow"></path>
+        <path d="M312 490 H380" class="arrow"></path>
+
+        <!-- Frame aligned tokens -->
+        <rect x="744" y="154" width="438" height="182" class="box" fill="var(--violet)" stroke="var(--violet-stroke)"></rect>
+        <text x="764" y="186" class="label">构造 frame-aligned trajectory tokens</text>
+        <text x="764" y="214" class="shape">frame tokens init: [B, F, D]</text>
+        <text x="764" y="238" class="shape">frame 0~3  <- hist_traj tokens</text>
+        <text x="764" y="262" class="shape">frame 4~9  <- noisy future traj tokens</text>
+        <text x="764" y="286" class="shape">其余 frame <- null traj token</text>
+        <text x="764" y="310" class="small">加 frame_traj_pos_embed 后 reshape 成 [B*F, 1, D]</text>
+
+        <path d="M670 226 H744" class="arrow-strong"></path>
+        <path d="M670 362 H744" class="arrow-strong"></path>
+
+        <rect x="744" y="392" width="438" height="108" class="box" fill="var(--amber)" stroke="var(--amber-stroke)"></rect>
+        <text x="764" y="424" class="label">复制成两套 AdaLN 条件</text>
+        <text x="764" y="452" class="shape">spatial cond: [B*F, D]</text>
+        <text x="764" y="476" class="shape">temporal cond: [B*(P+1), D]</text>
+        <text x="764" y="496" class="small">每帧只有 1 个 traj token，所以是 P+1 而不是 P+K</text>
+
+        <path d="M670 490 H744" class="arrow"></path>
+
+        <rect x="744" y="544" width="438" height="112" class="box" fill="var(--violet)" stroke="var(--violet-stroke)"></rect>
+        <text x="764" y="576" class="label">每帧拼接 1 个 trajectory token</text>
+        <text x="764" y="604" class="shape">traj frame token: [B*F, 1, D]</text>
+        <text x="764" y="628" class="shape">occ tokens:       [B*F, P, D]</text>
+        <text x="764" y="648" class="shape">cat -> [B*F, P+1, D]</text>
+
+        <path d="M670 98 C708 98 714 576 744 576" class="arrow"></path>
+        <path d="M963 336 V544" class="arrow-strong"></path>
+
+        <!-- Backbone -->
+        <rect x="120" y="714" width="1000" height="242" rx="12" ry="12" fill="#fbfcff" stroke="#cfd6e4" stroke-width="1.5"></rect>
+        <text x="146" y="748" class="group-title">重复 depth/2 次：spatial block + temporal block</text>
+
+        <rect x="172" y="784" width="286" height="116" class="box" fill="var(--violet)" stroke="var(--violet-stroke)"></rect>
+        <text x="192" y="816" class="label">Spatial TransformerBlock</text>
+        <text x="192" y="842" class="shape">input: [B*F, P+1, D]</text>
+        <text x="192" y="864" class="small">同一帧内：1 个 traj token 和 occ patches 互相 attention</text>
+
+        <rect x="510" y="784" width="234" height="116" class="box" fill="var(--gray)" stroke="var(--gray-stroke)"></rect>
+        <text x="530" y="816" class="label">reshape + temp_embed</text>
+        <text x="530" y="842" class="shape">[B*F,P+1,D]</text>
+        <text x="530" y="866" class="shape">-> [B*(P+1),F,D]</text>
+
+        <rect x="804" y="784" width="262" height="116" class="box" fill="var(--violet)" stroke="var(--violet-stroke)"></rect>
+        <text x="824" y="816" class="label">Temporal TransformerBlock</text>
+        <text x="824" y="842" class="shape">[B*(P+1),F,D]</text>
+        <text x="824" y="864" class="small">跨帧 attention；history occ / hist_traj 能影响 future frames</text>
+
+        <path d="M1022 656 C1022 706 315 706 315 784" class="arrow-strong"></path>
+        <path d="M1022 500 C1022 664 632 664 632 784" class="arrow"></path>
+        <path d="M458 842 H510" class="arrow-strong"></path>
+        <path d="M744 842 H804" class="arrow-strong"></path>
+        <path d="M936 900 C936 944 148 944 172 842" class="arrow"></path>
+
+        <!-- Split outputs -->
+        <rect x="286" y="992" width="652" height="74" class="box" fill="var(--gray)" stroke="var(--gray-stroke)"></rect>
+        <text x="306" y="1024" class="label">split</text>
+        <text x="306" y="1050" class="shape">traj_tokens: [B,F,D]     occ_tokens: [B*F,P,D]</text>
+
+        <path d="M620 956 V992" class="arrow-strong"></path>
+
+        <rect x="44" y="986" width="352" height="74" class="box" fill="var(--blue)" stroke="var(--blue-stroke)"></rect>
+        <text x="64" y="1018" class="label">occupancy velocity</text>
+        <text x="64" y="1044" class="shape">final_layer + unpatchify -> [B,F,64,25,25]</text>
+
+        <rect x="854" y="986" width="332" height="74" class="box" fill="var(--green)" stroke="var(--green-stroke)"></rect>
+        <text x="874" y="1018" class="label">future trajectory velocity</text>
+        <text x="874" y="1044" class="shape">slice frame 4~9 -> decode -> [B,6,2]</text>
+
+        <path d="M470 1030 H424" class="arrow-strong"></path>
+        <path d="M938 1030 H854" class="arrow-strong"></path>
+
+        <text x="44" y="1094" class="note">
+          训练：hist_traj = clean GT history，traj_t = noisy future GT；采样：hist_traj 是条件，future traj 从 noise 开始和 occ 一起被还原。
+        </text>
+      </svg>
+    </div>
+
+    <div class="legend">
+      <span><i class="swatch" style="background: var(--blue); color: var(--blue-stroke);"></i>occupancy 分支</span>
+      <span><i class="swatch" style="background: var(--green); color: var(--green-stroke);"></i>trajectory / history 条件</span>
+      <span><i class="swatch" style="background: var(--amber); color: var(--amber-stroke);"></i>timestep / command 条件</span>
+      <span><i class="swatch" style="background: var(--violet); color: var(--violet-stroke);"></i>joint transformer 主干</span>
+      <span><i class="swatch" style="background: var(--gray); color: var(--gray-stroke);"></i>reshape / split</span>
+    </div>
+  </main>
+</body>
+</html>
